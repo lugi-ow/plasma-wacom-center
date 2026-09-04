@@ -1,0 +1,32 @@
+{
+  "__comment": "Example Kando pie menu for Krita. Copy the menu object into ~/.config/kando/menus.json, or rebuild it in Kando's editor. Every node REQUIRES icon and iconTheme - Kando refuses the whole file without them. Trigger it from a pad button: bind the button to an F-key chord in the Drawing Tablet page, then add a command shortcut running: kando --menu \"Krita\". Kando sends physical key codes, so pie slices survive non-Latin keyboard layouts. Alt+1/Alt+3 are custom Krita bindings - adjust to your own shortcuts.",
+  "menus": [
+    {
+      "shortcut": "",
+      "shortcutID": "krita-pie",
+      "centered": false,
+      "root": {
+        "type": "submenu",
+        "name": "Krita",
+        "icon": "🎨",
+        "iconTheme": "emoji",
+        "children": [
+          { "type": "hotkey", "name": "Brush", "icon": "🖌️", "iconTheme": "emoji",
+            "data": { "hotkey": "KeyB", "delayed": true } },
+          { "type": "hotkey", "name": "Transform", "icon": "📐", "iconTheme": "emoji",
+            "data": { "hotkey": "ControlLeft+KeyT", "delayed": true } },
+          { "type": "hotkey", "name": "Deselect", "icon": "🚫", "iconTheme": "emoji",
+            "data": { "hotkey": "ControlLeft+ShiftLeft+KeyA", "delayed": true } },
+          { "type": "hotkey", "name": "Inverse selection", "icon": "🔄", "iconTheme": "emoji",
+            "data": { "hotkey": "ControlLeft+ShiftLeft+KeyI", "delayed": true } },
+          { "type": "hotkey", "name": "Magic wand", "icon": "🪄", "iconTheme": "emoji",
+            "data": { "hotkey": "AltLeft+Digit3", "delayed": true } },
+          { "type": "hotkey", "name": "Lasso", "icon": "➰", "iconTheme": "emoji",
+            "data": { "hotkey": "AltLeft+Digit1", "delayed": true } },
+          { "type": "hotkey", "name": "Reset rotation", "icon": "🎯", "iconTheme": "emoji",
+            "data": { "hotkey": "Numpad5", "delayed": true } }
+        ]
+      }
+    }
+  ]
+}
