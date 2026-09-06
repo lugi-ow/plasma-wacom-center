@@ -1,10 +1,11 @@
 # plasma-wacom-center
 
 Wacom-style **precision mode** for drawing tablets on KDE Plasma 6 (Wayland),
-plus a small settings window. Wacom ships no Linux driver, and Plasma's
-Drawing Tablet page covers mapping, pressure, and buttons - but not precision
-mode. This project fills that gap with plain scripts on top of KWin's own
-D-Bus interfaces. No daemons, no compiled code, no kernel modules.
+a pie menu that opens under the pen, and a small settings window. Wacom ships
+no Linux driver, and Plasma's Drawing Tablet page covers mapping, pressure,
+and buttons - but not precision mode. This project fills that gap with plain
+scripts on top of KWin's own D-Bus interfaces. No compiled code, no kernel
+modules, one optional small daemon (the touch preview).
 
 Built and tested on Kubuntu 26.04, Plasma 6.6, with a Bluetooth Wacom Intuos
 Pro M. Any tablet that Plasma's Drawing Tablet page recognizes should work -
@@ -29,6 +30,39 @@ devices are found by capability, not by model name.
   prospective size. Works live while precision mode is on.
 - **Wacom Center**, a PyQt window: size and dim sliders, express-key chord
   editor, buttons to the pie-menu editor and the system tablet page.
+- **Pie menu under the pen.** `tablet-pie.sh` moves the mouse onto the pen
+  and then opens a [Kando](https://kando.menu) menu, so the pie appears where
+  you draw, not where the mouse was left.
+- **ExpressKey touch preview** (experimental). While a finger rests on the
+  precision key, a ghost shows where the area would go. See below.
+
+<p align="center"><img src="docs/placement.svg" width="880" alt="The placement rule in three cases: pen at the centre, off-centre, and in a corner"></p>
+
+The placement rule in three cases. The area follows the pen, always holds
+the cursor, and stops at the screen edge.
+
+## In pictures
+
+<!-- Showcase video: paste the link GitHub gives you after uploading the MP4 here, on a line of its own. -->
+
+<p align="center"><img src="docs/screenshot-precision-mode.png" width="880" alt="Precision mode on: Gwenview with a reference photo on the left, Krita on the right, and a tablet-shaped rectangle with an amber border over the Krita canvas"></p>
+
+Precision mode on, with the reference in Gwenview and the drawing in Krita.
+The pen now maps to the rectangle with the amber border; the rest of the
+screen is dimmed (10% here). The cursor did not move when the mode came on.
+
+<p align="center"><img src="docs/ring-size-preview.png" width="720" alt="Ring size preview: a centred amber rectangle with the size in percent"></p>
+
+A tick of the touch ring. The preview shows the size the area will have,
+then fades out.
+
+<p align="center"><img src="docs/screenshot-wacom-center-precision.png" width="400" alt="Wacom Center, Precision tab"> <img src="docs/screenshot-wacom-center-pad.png" width="400" alt="Wacom Center, Pad buttons tab"></p>
+
+Wacom Center: the size and dim sliders, and the chord editor for the
+express keys.
+
+The ring preview picture is a drawing; `docs/make-images.py` renders it
+with the same geometry the scripts use. The other pictures are screenshots.
 
 ## Requirements
 
@@ -53,73 +87,34 @@ cd plasma-wacom-center
 ```
 
 The installer copies the scripts to `~/.local/bin`, creates and registers
-three global shortcuts (Meta+Shift+F12 toggle, F10/F9 size), and offers to
-bind your tablet's ring. It then prints two manual steps:
+four global shortcuts (Meta+Shift+F12 toggle, F11 pie, F10/F9 size), adds
+an autostart entry for the touch preview, and offers to bind your tablet's
+ring. It then prints the manual steps:
 
-1. A one-time sudo udev rule so the scripts can read the pen's position.
-   Without it, precision mode centres on the mouse cursor instead of the pen.
-2. Binding a pad button to Meta+Shift+F12 in System Settings -> Drawing
-   Tablet.
+1. One sudo udev rule so the scripts can read the pen's position and, on
+   Wacom tablets, the express keys' touch sense. Without it, precision
+   mode centres on the mouse cursor instead of the pen.
+2. Binding pad buttons to Meta+Shift+F12 (toggle) and Meta+Shift+F11 (pie)
+   in System Settings -> Drawing Tablet.
 
 If the shortcuts do not fire immediately, log out and back in once.
-
-## The knowledge (why these scripts look the way they do)
-
-Hard-won facts, each of which cost a debugging session. If you build your own
-tablet tooling on Plasma Wayland, read this first.
-
-**KWin owns the tablet mapping.** Each input device is a D-Bus object under
-`org.kde.KWin /org/kde/KWin/InputDevice/eventN` with writable properties -
-`outputArea` (the mapped screen rectangle, as fractions) is all precision
-mode needs. Event numbers change on every Bluetooth reconnect: never cache
-them, find the device by its `tabletTool` / `tabletPad` property each run.
-
-**Letter chords die under non-Latin layouts.** KWin's button-rebind injector
-resolves a chord's letter through the *currently active* keyboard layout
-(`keycodeFromKeysym` searches only that layout). With a Cyrillic layout
-active there is no key producing a Latin `p`, so `Meta+Shift+P` sends
-nothing - silently, except for a `kwin_buttonrebinds` line in the journal.
-F-keys and bare modifiers exist in every layout. Bind pads and rings to
-F-key chords only.
-
-**Command shortcuts need three things.** A `.desktop` file that the shortcut
-daemon will execute must carry `X-KDE-GlobalAccel-CommandShortcut=true`, must
-be in the service cache (`kbuildsycoca6` after creating it), and must be
-registered with the daemon (`doRegister` + `setForeignShortcut` on
-`org.kde.kglobalaccel`). Miss any of the three and the chord does nothing.
-After a relogin the daemon rebuilds everything from `kglobalshortcutsrc`.
-
-**Ring bindings** live in `kcminputrc` as
-`[ButtonRebinds][TabletRing][<pad device name>][<mode>]` with
-`0=AxisKey,<up chord>,<down chord>,<threshold>` - threshold 120 fires every
-~5 degrees of ring travel, 360 every ~15.
-
-**The pen's screen position is not exposed to scripts.** KWin's scripting
-`workspace.cursorPos` is hardwired to the mouse. Two usable sources instead,
-best first: the kernel's evdev state (`EVIOCGABS`, always fresh while the
-pen is in proximity - needs the udev `uaccess` rule), and XWayland's stylus
-device (XInput2 valuators in desktop coordinates - fresh only while the pen
-hovers an X11 window).
-
-**Overlays that must not eat input**: a Qt window with
-`Qt.WindowTransparentForInput` on the layer-shell overlay layer
-(`org.kde.layershell` QML module) covers the screen, stays click-through,
-and survives everything except its own process exit.
-
-**One-shot KWin scripts** are the escape hatch for anything only the
-compositor knows: load JS via `org.kde.kwin.Scripting`, `print()` the
-answer, read it back from `journalctl --user -u plasma-kwin_wayland`.
 
 ## Known limitations
 
 - Single monitor. The placement math uses the virtual screen; with two
   outputs it will misplace the area. Patches welcome.
+- Display scale other than 100% is untested. The overlay takes pixel
+  positions from the X screen and draws in Qt's logical pixels. At 100%
+  both are the same space.
 - The base mapping is assumed to be the default full-tablet stretch. A
   letterboxed mapping set on the Display page is restored correctly on
   toggle-off, but the cursor-stationary placement will drift.
 - Right after a Bluetooth reconnect, before the pen first touches the
   tablet, the kernel reports position 0,0 and a toggle lands the area
   top-left. Hover the pen once first.
+- The touch preview needs keys with a touch sensor (Wacom Intuos Pro,
+  Cintiq Pro, MobileStudio Pro). Layouts are built in for the Intuos Pro
+  2017 family; the M size is measured, S and L are expected to match.
 - Stylus click-to-focus between windows is broken upstream in Plasma 6.6
   (KDE bug 498386 and friends) - not something this project can fix.
 
@@ -128,9 +123,44 @@ answer, read it back from `journalctl --user -u plasma-kwin_wayland`.
 Plasma has no on-screen pie menus; [Kando](https://kando.menu) fills that
 role well on Plasma Wayland and sends physical key codes (layout-proof).
 `examples/kando-krita-menu.json` is a working Krita pie: selection tools,
-transform, brush, canvas rotation reset. Trigger it from a pad button via a
-command shortcut running `kando --menu "Krita"`.
+transform, brush, canvas rotation reset.
+
+Symptom without this script: the pie opens where the mouse was last left,
+not under the pen, because Kando asks the compositor for the pointer and
+gets the mouse. Open it with `tablet-pie.sh Krita` instead - install.sh
+binds Meta+Shift+F11 to it. The script reads the pen position, warps the mouse there
+(`tablet-pointer-warp.py`) and then runs `kando --menu "Krita"`, so the pie
+opens under the pen. Without a pen position (tablet asleep, no udev rule)
+it runs `kando --menu` as before, at the mouse. The menu name is the first
+argument. It needs write access to `/dev/uinput`. Kubuntu grants it to the
+logged-in user. Elsewhere add a udev rule: `KERNEL=="uinput", TAG+="uaccess"`.
+
+## ExpressKey touch preview (experimental)
+
+The Intuos Pro's express keys sense a finger that rests on them before the
+press. `tablet-hover.py` uses that to show a ghost of the area precision
+mode would map right now - same placement math, nothing changed - and
+moves it with the pen, and removes it when the finger lifts or the key is
+pressed. On a Wacom Intuos Pro (2017 or later) there is nothing to set
+up beyond the udev rule from the install step: the report layouts are
+built into `tablet-hover.py`, and the daemon learns which key is the
+precision key the first time a single key press is followed by
+precision mode switching on or off. It saves that key to
+`~/.config/tabprec.conf` as `HOVER_MASK`. Only keys with a touch sensor
+can do this (Intuos Pro, Cintiq Pro, MobileStudio Pro); on other tablets
+the daemon idles. For a Wacom model it does not know, one run of
+`tablet-pad-probe.py` per connection type shows the bytes that carry the
+touch and press bits, which go into the conf as `HOVER_REPORT_USB`,
+`HOVER_BYTE_USB`, `PRESS_BYTE_USB` and the same with `_BT`; the two
+buses use different layouts. Reference, Intuos Pro M, one bit per key,
+key N = bit N-1 (key 8 = `0x80`): over USB report `0x11`, byte 2 =
+touch bits, byte 1 = press bits; over Bluetooth report `0x80`, byte 283 =
+touch bits, byte 282 = press bits.
 
 ## License
 
 MIT. Built with Claude Code.
+
+---
+
+[The knowledge (why these scripts look the way they do)](KNOWLEDGE.md) - the facts behind these scripts, each of which cost a debugging session.

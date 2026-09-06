@@ -20,7 +20,9 @@ STEP=0.02
 SCALE=$(awk -v s="$SCALE" -v d="$STEP" 'BEGIN{
     s += d; if (s > 0.80) s = 0.80; if (s < 0.05) s = 0.05;
     printf "%.4f", s}')
-printf 'SCALE=%s\nDIM=%s\n' "$SCALE" "$DIM" > "$CONF"
+# rewrite SCALE/DIM in place and keep every other line (touch-preview keys)
+REST=$(grep -v -E '^[[:space:]]*(SCALE|DIM)=' "$CONF" 2>/dev/null)
+{ printf 'SCALE=%s\nDIM=%s\n' "$SCALE" "$DIM"; [ -n "$REST" ] && printf '%s\n' "$REST"; } > "$CONF"
 
 "$DIR/tablet-precision.sh" resize
 

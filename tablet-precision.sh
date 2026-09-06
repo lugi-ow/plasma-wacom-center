@@ -2,7 +2,7 @@
 # tablet-precision.sh - drawing-tablet "precision mode" toggle for KDE Plasma 6
 # on Wayland. Part of plasma-wacom-center (MIT).
 #
-# Usage: tablet-precision.sh [toggle|resize]   (default: toggle)
+# Usage: tablet-precision.sh [toggle|resize|where]   (default: toggle)
 #
 # toggle ON:  maps the pen to a TABLET-SHAPED rectangle (width = SCALE of the
 #      screen, height follows the tablet's own aspect ratio, so there is no
@@ -16,6 +16,8 @@
 #      full screen). Toggle state = the state file, not the area value.
 # resize: while ON, recompute the area with the current SCALE from the conf
 #      (the ring size control calls this); no-op when OFF.
+# where:  print "X Y W H DIM SW SH" - the rectangle a toggle ON would map right now,
+#      nothing changed (tablet-hover.py draws the ghost from it).
 #
 # Config: ~/.config/tabprec.conf - SCALE (0.05-0.80 of screen width), DIM
 # (0-0.8). Wacom Center and tablet-precision-size.sh write it. Silent by
@@ -64,7 +66,7 @@ if [ -z "$pen" ]; then
     exit 1
 fi
 
-apply_area() {  # compute + set the precision mapping and (re)spawn the overlay
+compute_area() {  # sets W H X Y (px) and FX FY FW FH (fractions) for the pen's position
     if POS=$(python3 "$DIR/tablet-pen-pos.py" 2>/dev/null); then
         set -- $POS
     else
@@ -95,6 +97,10 @@ $(awk -v s="$SCALE" -v cx="$CX" -v cy="$CY" -v sw="$SW" -v sh="$SH" -v tab="${TA
     x = int(cx / sw * (sw - w) + 0.5); y = int(cy / sh * (sh - h) + 0.5);
     printf "%d %d %d %d %.6f %.6f %.6f %.6f", w,h,x,y, x/sw,y/sh,w/sw,h/sh}')
 EOF
+}
+
+apply_area() {  # compute + set the precision mapping and (re)spawn the overlay
+    compute_area || return 1
     busctl --user set-property $KW $MGR/$pen $IF outputArea '(dddd)' "$FX" "$FY" "$FW" "$FH" || { note "Mapping change failed"; return 1; }
     [ -f "$RD/overlay.pid" ] && kill "$(cat "$RD/overlay.pid")" 2>/dev/null
     nohup python3 "$DIR/tablet-overlay.py" "$X" "$Y" "$W" "$H" "$DIM" > "$RD/overlay.log" 2>&1 &
@@ -104,6 +110,9 @@ EOF
 case "$MODE" in
 resize)
     [ -f "$STATE" ] && apply_area
+    ;;
+where)
+    compute_area && echo "$X $Y $W $H $DIM $SW $SH"
     ;;
 *)
     if [ ! -f "$STATE" ]; then

@@ -24,8 +24,19 @@ Window {
     // border drawn INSIDE the clear rectangle - never crosses the screen edge
     Rectangle {
         x: px; y: py; width: pw; height: ph
-        color: "transparent"
+        color: label !== "" ? Qt.rgba(0.9, 0.66, 0.09, 0.10) : "transparent"   // ghost tint
         border.color: "#e6a817"
         border.width: 2
+
+        Text {   // ghost caption (hover preview only)
+            visible: label !== ""
+            x: 10; y: 6
+            text: label
+            color: "white"
+            style: Text.Outline
+            styleColor: "black"
+            font.pixelSize: 22
+            font.bold: true
+        }
     }
 }

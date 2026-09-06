@@ -67,7 +67,14 @@ def read_conf():
 
 
 def write_conf(scale, dim):
-    CONF.write_text(f"SCALE={scale:.4f}\nDIM={dim:.2f}\n")
+    """Update SCALE and DIM in place; every other line (touch-preview keys,
+    comments) stays."""
+    try:
+        rest = [l for l in CONF.read_text().splitlines()
+                if l.split("=", 1)[0].strip() not in ("SCALE", "DIM")]
+    except OSError:
+        rest = []
+    CONF.write_text("\n".join([f"SCALE={scale:.4f}", f"DIM={dim:.2f}"] + rest) + "\n")
 
 
 def kread(pad, idx):
