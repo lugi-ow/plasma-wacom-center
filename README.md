@@ -43,7 +43,7 @@ the cursor, and stops at the screen edge.
 
 ## In pictures
 
-<!-- Showcase video: paste the link GitHub gives you after uploading the MP4 here, on a line of its own. -->
+https://github.com/user-attachments/assets/5c04b1b3-ea14-4669-b458-18271664d768
 
 <p align="center"><img src="docs/screenshot-precision-mode.png" width="880" alt="Precision mode on: Gwenview with a reference photo on the left, Krita on the right, and a tablet-shaped rectangle with an amber border over the Krita canvas"></p>
 
