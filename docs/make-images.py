@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-# make-images.py OUT_DIR - README illustrations for plasma-wacom-center.
-# Draws a stylized 1280x720 desktop (no real screenshot: nothing private, no
-# app branding) and overlays exactly what the scripts draw: the dim-around
-# overlay with its 2 px inset border (tablet-overlay.qml) and the centred ring
-# size preview (the same picture in its waiting style: the border dashed, 5 px
-# on, 5 px off). Also writes placement.svg, three
-# panels of the cursor-stationary placement rule. Offscreen Qt, no display.
+# make-images.py OUT_DIR - drawn illustrations for plasma-wacom-center.
+# Writes placement.svg: three panels of the cursor-stationary placement rule
+# (TECHNICAL.md). A stylized 1280x720 desktop with the precision overlay
+# (precision_image, the same geometry the scripts use) stays available for a
+# drawn stand-in of the screenshot. It is not written. Offscreen Qt, no display.
 import os
 import sys
 
@@ -158,31 +156,6 @@ def precision_image():
     return img
 
 
-def preview_image():
-    """The ring size preview with precision mode off: the mode's own picture,
-    centred, with the dashed border of a preview (tablet-overlay.qml, waiting)."""
-    img, p = new_image()
-    _, _, w, h = area(SCALE, (0.5, 0.5))
-    x, y = (W - w) // 2, (H - h) // 2
-    dim = QColor(0, 0, 0, round(0.35 * 255))
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(dim)
-    p.drawRect(QRectF(0, 0, W, y))
-    p.drawRect(QRectF(0, y + h, W, H - y - h))
-    p.drawRect(QRectF(0, y, x, h))
-    p.drawRect(QRectF(x + w, y, W - x - w, h))
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    pen = QPen(AMBER, 2)
-    pen.setDashPattern([2.5, 2.5])          # in pen widths, like ShapePath.dashPattern: 5 px on, 5 px off
-    pen.setCapStyle(Qt.PenCapStyle.FlatCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
-    p.setPen(pen)
-    p.drawRect(QRectF(x + 1, y + 1, w - 2, h - 2))      # inset like the QML border
-    pen_cursor(p, 0.66 * W, 0.42 * H)
-    p.end()
-    return img
-
-
 def placement_svg():
     """Three panels: the same rule with the pen centred, off-centre, in a corner."""
     cases = [((0.5, 0.5), "pen at the centre (0.5, 0.5)"), ((0.8, 0.3), "pen at (0.8, 0.3)"),
@@ -225,9 +198,8 @@ def placement_svg():
 
 
 os.makedirs(out_dir, exist_ok=True)
-# precision-mode.png is a real screenshot now (docs/screenshot-precision-mode.png);
-# the drawn version stays available: precision_image().save(...)
-preview_image().save(os.path.join(out_dir, "ring-size-preview.png"))
+# precision-mode.png is a real screenshot now (docs/screenshot-precision-mode.png).
+# The drawn version stays available: precision_image().save(...)
 with open(os.path.join(out_dir, "placement.svg"), "w", encoding="utf-8") as f:
     f.write(placement_svg())
 print("wrote", sorted(os.listdir(out_dir)))

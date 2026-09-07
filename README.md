@@ -1,94 +1,61 @@
 # plasma-wacom-center
 
-Wacom-style **precision mode** for drawing tablets on KDE Plasma 6 (Wayland),
-a pie menu that opens under the pen, and a small settings window. Wacom ships
-no Linux driver, and Plasma's Drawing Tablet page covers mapping, pressure,
-and buttons - but not precision mode. This project fills that gap with plain
-scripts on top of KWin's own D-Bus interfaces. No compiled code, no kernel
-modules, one optional small daemon (the touch preview).
+Precision mode for drawing tablets on KDE Plasma 6 (Wayland), like the one
+in Wacom's own driver on Windows. It comes with a pie menu that opens under
+the pen and a small settings window.
 
-Built and tested on Kubuntu 26.04, Plasma 6.6, with a Bluetooth Wacom Intuos
-Pro M. Any tablet that Plasma's Drawing Tablet page recognizes should work -
-devices are found by capability, not by model name.
+Wacom has no Linux driver. Plasma's Drawing Tablet page sets the mapping,
+the pressure curve and the buttons, but it has no precision mode. This
+project adds it with a few small scripts. There is nothing to compile.
+
+Built and tested on Kubuntu 26.04 with Plasma 6.6 and a Wacom Intuos Pro M
+over Bluetooth. Any tablet that Plasma's Drawing Tablet page recognizes
+works. The touch preview and the area drag need a Wacom tablet with
+touch-sensitive pad keys (Intuos Pro, Cintiq Pro, MobileStudio Pro).
 
 ## What it does
 
-- **Precision mode toggle** (a pad button, or Meta+Shift+F12): the pen maps
-  to a small rectangle around the cursor instead of the whole screen, for
-  detail work. Press again to go back.
-- **The cursor does not move on toggle.** The rectangle is placed with the
-  rule Wacom's Windows driver uses: `rect = norm * (screen - rect)`, where
-  `norm` is the pen's normalized tablet position. Near a screen border the
-  area drifts slower than the cursor and can never leave the screen.
-- **No stretch inside the area.** The rectangle keeps the tablet's own
-  aspect ratio (read from the hardware), so your input is not distorted.
-- **Dim overlay.** Everything outside the mapped area dims; the work area
-  stays clear with a thin border. Click-through, on the compositor overlay
-  layer. Can be adjusted in settings. Every preview the toolkit shows (the
-  ring preview, the touch-preview ghost, the area while it is dragged) is
-  the same picture with the border dashed and flowing clockwise: a
-  rectangle waiting to be activated.
-- **Ring size control.** The tablet's touch ring resizes the area between
-  5 and 80% of the screen width. Each tick adds or removes a number of
-  percentage points (half a point by default) and a tick fires every so
-  many degrees of ring travel (5 by default, the ring's own step); both are
-  Wacom Center settings, with a switch for the direction. With precision mode off, a
-  centred fading preview shows the prospective size; with it on, the area
-  itself grows or shrinks around its centre and stays where it is. Ticks
-  while the area is being dragged are ignored.
-- **Wacom Center**, a PyQt window: size and dim sliders, the hold and
-  long-press times, the ring step and tick angle, the express-key chord
-  editor, buttons to the pie-menu editor and the system tablet page.
-- **Pie menu under the pen.** `tablet-pie.sh` moves the mouse onto the pen
-  and then opens a [Kando](https://kando.menu) menu, so the pie appears where
-  you draw, not where the mouse was left.
-- **ExpressKey touch preview and area drag** (experimental). While a finger
-  rests on the precision key, a ghost - precision mode's own picture with the
-  flowing border - shows where the area would go. With precision mode on,
-  resting the finger drags the area to a new place and a press lands it;
-  keeping the key pressed leaves the mode. Both times are settings, down to
-  0 s. See below.
+- **Precision mode.** Press a pad key. The pen now maps to a small area
+  around the cursor, for detail work. Press the key again to get the full
+  screen back. The cursor does not jump, and the screen outside the area
+  dims. The area has the shape of your tablet, so your strokes keep their
+  proportions.
+- **Ring size control.** Turn the touch ring to make the area bigger or
+  smaller. With precision mode off, a preview shows the new size. With it
+  on, the area itself grows or shrinks in place.
+- **Touch preview.** Rest a finger on the precision key. A ghost shows where
+  the area will land, and it follows the pen.
+- **Area drag.** With precision mode on, rest a finger on the precision key
+  and move the pen. The area follows the pen. Press the key to put the area
+  there. Keep the key pressed to leave precision mode.
+- **Pie menu under the pen.** A pad key opens a [Kando](https://kando.menu)
+  pie menu at the pen, not where the mouse was left.
+- **Wacom Center.** A settings window for the area size, the dim strength,
+  the hold and long-press times, the ring, and the pad keys.
 
-<p align="center"><img src="docs/placement.svg" width="880" alt="The placement rule in three cases: pen at the centre, off-centre, and in a corner"></p>
-
-The placement rule in three cases. The area follows the pen, always holds
-the cursor, and stops at the screen edge.
+Precision mode has a solid amber border. A preview has a dashed border that
+moves.
 
 ## In pictures
 
 https://github.com/user-attachments/assets/5c04b1b3-ea14-4669-b458-18271664d768
 
-<p align="center"><img src="docs/screenshot-precision-mode.png" width="880" alt="Precision mode on: Gwenview with a reference photo on the left, Krita on the right, and a tablet-shaped rectangle with an amber border over the Krita canvas"></p>
+<p align="center"><img src="docs/screenshot-precision-mode.png" width="880" alt="Precision mode on: a reference photo in Gwenview on the left, Krita on the right, and a tablet-shaped area with an amber border over the Krita canvas"></p>
 
-Precision mode on, with the reference in Gwenview and the drawing in Krita.
-The pen now maps to the rectangle with the amber border; the rest of the
-screen is dimmed (10% here). The cursor did not move when the mode came on.
-
-<p align="center"><img src="docs/ring-size-preview.png" width="720" alt="Ring size preview: the dim overlay with a centred clear rectangle and a dashed amber border"></p>
-
-A tick of the touch ring with precision mode off. The preview is the mode's
-own picture, centred, with the dashed border every preview wears; it fades
-out by itself. With the mode on, the area itself resizes around its centre
-and nothing else shows.
+Precision mode on, with a reference photo in Gwenview and the drawing in
+Krita. The pen maps to the area with the amber border. The rest of the
+screen dims. The cursor did not move when the mode came on.
 
 <p align="center"><img src="docs/screenshot-wacom-center-precision.png" width="400" alt="Wacom Center, Precision tab"> <img src="docs/screenshot-wacom-center-pad.png" width="400" alt="Wacom Center, Pad buttons tab"></p>
 
-Wacom Center: the size and dim sliders, the hold and long-press times, the
-ring step and tick angle; and the chord editor for the express keys.
-
-The ring preview picture is a drawing; `docs/make-images.py` renders it
-with the same geometry the scripts use. The other pictures are screenshots.
+Wacom Center. Left, the Precision tab. Right, the Pad buttons tab.
 
 ## Requirements
 
-Everything below ships with a stock Kubuntu / KDE Plasma 6.5+ install except
-PyQt6:
-
-- Plasma 6.5 or newer on Wayland (6.6 tested). X11 sessions: use `xsetwacom`
-  instead, this project is Wayland-only.
-- `python3-pyqt6` and `python3-pyqt6.qtquick` (overlay and settings window)
-- `qml6-module-org-kde-layershell` and `qml6-module-qtquick-shapes` (both
-  dependencies of the Plasma desktop, so present)
+- KDE Plasma 6.5 or newer, on Wayland. This project does not work on X11.
+  On X11, use `xsetwacom` instead.
+- Two Python packages. Everything else is part of a standard Plasma desktop.
+- [Kando](https://kando.menu), if you want the pie menu.
 
 ```
 sudo apt install python3-pyqt6 python3-pyqt6.qtquick
@@ -96,138 +63,103 @@ sudo apt install python3-pyqt6 python3-pyqt6.qtquick
 
 ## Install
 
-```
-git clone https://github.com/lugi-ow/plasma-wacom-center
-cd plasma-wacom-center
-./install.sh
-```
+1. In a terminal, run:
 
-The installer copies the scripts to `~/.local/bin`, creates and registers
-four global shortcuts (Meta+Shift+F12 toggle, F11 pie, F10/F9 size), adds
-an autostart entry for the touch preview, and offers to bind your tablet's
-ring. It then prints the manual steps:
+   ```
+   git clone https://github.com/lugi-ow/plasma-wacom-center
+   cd plasma-wacom-center
+   ./install.sh
+   ```
 
-1. One sudo udev rule so the scripts can read the pen's position and, on
-   Wacom tablets, the express keys' touch sense. Without it, precision
-   mode centres on the mouse cursor instead of the pen.
-2. Binding pad buttons to Meta+Shift+F12 (toggle) and Meta+Shift+F11 (pie)
-   in System Settings -> Drawing Tablet.
+   The installer copies the scripts to `~/.local/bin` and creates the
+   shortcuts. It adds the touch preview to autostart and offers to bind
+   the touch ring. At the end it prints the steps that need you.
 
-If the shortcuts do not fire immediately, log out and back in once.
+2. Run the `sudo` command the installer prints. It adds one permission
+   rule, so the scripts can read the pen position and the touch sense of
+   the pad keys.
+
+3. In System Settings, open Drawing Tablet, then the Pad tab.
+
+4. Press the pad key you want as the precision key.
+
+5. Choose "Send keyboard key".
+
+6. Press `Meta+Shift+F12`.
+
+7. For the pie menu, bind a second pad key to `Meta+Shift+F11` the same way.
+
+8. Log out and log in again. This starts the touch preview and makes the
+   shortcuts work.
+
+Bind pad keys to F-keys and modifiers only. A letter does not work while a
+non-Latin keyboard layout is active.
+
+## The precision key
+
+The precision key is the pad key bound to `Meta+Shift+F12`. On a Wacom
+Intuos Pro (2017 or later) the pad keys sense a finger that rests on them,
+before the press. Wacom calls these keys ExpressKeys. The touch preview and
+the area drag use that sense.
+
+There is nothing to set up. After the install, press the precision key
+once. From then on the toolkit knows which key it is.
+
+| Precision mode | What you do | What happens |
+|---|---|---|
+| off | press the key | precision mode comes on, around the cursor |
+| off | rest a finger on the key | a ghost shows where the area will land, and follows the pen |
+| on | press the key at once | precision mode goes off |
+| on | rest a finger for the hold time, then press | the area moves to the pen |
+| on | rest a finger, then lift it without a press | nothing changes |
+| on | rest a finger, press, and keep the key down for the long-press time | the area moves, then precision mode goes off |
+
+The hold time and the long-press time are the two time fields in Wacom
+Center. With the hold time at 0, every press is a move, and the long press
+is the way out of precision mode.
+
+## Settings
+
+Open Wacom Center from the application menu, in the Settings category.
+The Precision tab has the area size (5 to 80 % of the screen width), the
+dim strength, the hold time, the long-press time, the ring step, the tick
+angle, and a switch for the ring direction. The Pad buttons tab sets the
+key chord each pad key sends.
+
+## Pie menu
+
+Plasma has no pie menus. [Kando](https://kando.menu) adds them, and it
+works on Plasma Wayland. `examples/kando-krita-menu.json` is a Kando menu
+file with a Krita menu: brush, transform, selection tools, and a canvas
+rotation reset. The pad key bound to `Meta+Shift+F11` opens the menu named
+`Krita` under the pen. `TECHNICAL.md` says how to open a different menu.
 
 ## Known limitations
 
-- Single monitor. The placement math uses the virtual screen; with two
-  outputs it will misplace the area. Patches welcome.
-- Display scale other than 100% is untested. The overlay takes pixel
-  positions from the X screen and draws in Qt's logical pixels. At 100%
-  both are the same space.
-- The base mapping is assumed to be the default full-tablet stretch. A
-  letterboxed mapping set on the Display page is restored correctly on
-  toggle-off, but the cursor-stationary placement will drift.
-- Right after a Bluetooth reconnect, before the pen first touches the
-  tablet, the kernel reports position 0,0 and a toggle lands the area
-  top-left. Hover the pen once first.
-- The touch preview needs keys with a touch sensor (Wacom Intuos Pro,
-  Cintiq Pro, MobileStudio Pro). Layouts are built in for the Intuos Pro
-  2017 family; the M size is measured, S and L are expected to match.
-- Stylus click-to-focus between windows is broken upstream in Plasma 6.6
-  (KDE bug 498386 and friends) - not something this project can fix.
-
-## Pie menus
-
-Plasma has no on-screen pie menus; [Kando](https://kando.menu) fills that
-role well on Plasma Wayland and sends physical key codes (layout-proof).
-`examples/kando-krita-menu.json` is a working Krita pie: selection tools,
-transform, brush, canvas rotation reset.
-
-Symptom without this script: the pie opens where the mouse was last left,
-not under the pen, because Kando asks the compositor for the pointer and
-gets the mouse. Open it with `tablet-pie.sh Krita` instead - install.sh
-binds Meta+Shift+F11 to it. The script reads the pen position, warps the mouse there
-(`tablet-pointer-warp.py`) and then runs `kando --menu "Krita"`, so the pie
-opens under the pen. Without a pen position (tablet asleep, no udev rule)
-it runs `kando --menu` as before, at the mouse. The menu name is the first
-argument. It needs write access to `/dev/uinput`. Kubuntu grants it to the
-logged-in user. Elsewhere add a udev rule: `KERNEL=="uinput", TAG+="uaccess"`.
-
-## ExpressKey touch preview and area drag (experimental)
-
-The Intuos Pro's express keys sense a finger that rests on them before the
-press. `tablet-hover.py` uses that to show a ghost of the area precision
-mode would map right now - same placement math, nothing changed - and
-moves it with the pen, and removes it when the finger lifts or the key is
-pressed. The ghost is precision mode's own picture, the same dim and the
-same border, with the border dashed and flowing clockwise: the sign of a
-preview waiting to be activated. On a Wacom Intuos Pro (2017 or later) there is nothing to set
-up beyond the udev rule from the install step: the report layouts are
-built into `tablet-hover.py`, and the daemon learns which key is the
-precision key the first time a single key press is followed by
-precision mode switching on or off. It saves that key to
-`~/.config/tabprec.conf` as `HOVER_MASK`. Only keys with a touch sensor
-can do this (Intuos Pro, Cintiq Pro, MobileStudio Pro); on other tablets
-the daemon idles. For a Wacom model it does not know, one run of
-`tablet-pad-probe.py` per connection type shows the bytes that carry the
-touch and press bits, which go into the conf as `HOVER_REPORT_USB`,
-`HOVER_BYTE_USB`, `PRESS_BYTE_USB` and the same with `_BT`; the two
-buses use different layouts. Reference, Intuos Pro M, one bit per key,
-key N = bit N-1 (key 8 = `0x80`): over USB report `0x11`, byte 2 =
-touch bits, byte 1 = press bits; over Bluetooth report `0x80`, byte 283 =
-touch bits, byte 282 = press bits.
-
-With precision mode already on, the same key relocates the area. Rest a
-finger on it (the hold time field in Wacom Center, `HOLD` in
-`~/.config/tabprec.conf`, default 0.15 s, picked up without a restart): the
-pen gets the whole screen back for the moment, the cursor roams, and the
-real overlay travels around it with the same placement rule, wearing the
-flowing border until the press. Press the key to map the area there,
-around the cursor. Lift the finger without a press and both the overlay
-and the mapping return to the old area. A press before the hold has passed
-still switches the mode off; ring ticks during the drag are ignored.
-
-The hold time has no floor. At 0 s a touch starts the drag at once and
-every press of the key is a move, so the way out of the mode is the long
-press: keep the key pressed for the long-press time (the second field,
-`LONG`, default 0.7 s, 0 disables it) after such a move and precision mode
-switches off. The area lands at the press first, because the compositor
-fires the toggle on the key-down; the mode leaves when the time is up.
-
-What the precision key does, in one table (`HOLD` and `LONG` are the two
-time fields in Wacom Center):
-
-| Precision mode | On the precision key | Result |
-|---|---|---|
-| off | press | the mode comes on, the area around the cursor |
-| off | rest a finger | the ghost shows where the area would go, following the pen |
-| on | press before `HOLD` has passed | the mode goes off |
-| on | rest for `HOLD`, then press | the area moves to the pen |
-| on | rest for `HOLD`, lift without pressing | nothing changes |
-| on | rest for `HOLD`, press and keep the key down for `LONG` | the area moves, then the mode goes off |
-
-With `HOLD` at 0 the third row disappears: every press is a move, and the
-last row is the way out.
-
-Under the hood the overlay is moved through a named pipe
-(`tablet-overlay.py --fifo`, the lines `waiting` and `solid` switch its
-border), the ring resize uses the same pipe instead of respawning the
-overlay, the toggle script's `suspend` and `resume` modes bracket the drag,
-a marker file that the daemon keeps fresh tells the toggle that the press is
-a move, and a lock file keeps two runs of the toggle script from
-interleaving when the daemon's long-press toggle follows the compositor's.
+- One monitor. With two monitors the area lands in the wrong place.
+- Display scale 100 % only. Nobody has tested other scales.
+- Keep the tablet mapped to the full screen in System Settings. With a
+  custom mapping, precision mode still turns off correctly, but the area
+  can land away from the cursor.
+- After a Bluetooth reconnect, hover the pen over the tablet once before
+  you turn precision mode on. Otherwise the area lands in the top-left
+  corner.
+- The touch preview and the area drag need pad keys with a touch sensor
+  (Wacom Intuos Pro, Cintiq Pro, MobileStudio Pro). On other tablets the
+  toggle, the ring and the pie menu still work.
+- A pen click does not move the focus to another window. This is a Plasma
+  6.6 bug (KDE bug 498386), not something this project can fix.
 
 ## For contributors and AI agents
 
-`PROJECT_MAP.md` says what each file is for, how the processes talk to each
-other (the runtime files, the conf keys, the overlay's pipe) and lists every
-chunk marker (`# ── chunk: <name>`), so you can grep instead of read.
-`tests/run_all.sh` runs every gate in about a minute without a tablet: compile,
-shell syntax, the map check, and two rigs that drive the toggle script and the
-hover daemon with fakes.
+- `TECHNICAL.md` says how the toolkit works: the placement rule, the
+  overlay, the ring, the touch preview, the settings and the tests.
+- `PROJECT_MAP.md` lists every file, process and runtime file, and every
+  chunk marker (`# ── chunk: <name>`), so you can grep instead of read.
+- `KNOWLEDGE.md` holds the facts behind the design. Each one cost a
+  debugging session.
+- `tests/run_all.sh` runs every gate in about a minute, without a tablet.
 
 ## License
 
 MIT. Built with Claude Code.
-
----
-
-[The knowledge (why these scripts look the way they do)](KNOWLEDGE.md) - the facts behind these scripts, each of which cost a debugging session.
