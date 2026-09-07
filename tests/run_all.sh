@@ -1,5 +1,5 @@
 #!/bin/bash
-# tests/run_all.sh - every gate in one go, ~35 s: compile every Python file,
+# tests/run_all.sh - every gate in one go, ~60 s: compile every Python file,
 # syntax-check every shell script, the map gate (tests/check_map.py), then the
 # three rigs - test_script.sh (the toggle with a stubbed busctl, a fake pen
 # reader and a fake overlay), test_size.sh (the ring script with a stub toggle

@@ -176,20 +176,30 @@ pen gets the whole screen back for the moment, the cursor roams, and the
 real overlay travels around it with the same placement rule, wearing the
 flowing border until the press. Press the key to map the area there,
 around the cursor. Lift the finger without a press and both the overlay
-and the mapping return to the old area. A quick press still switches the
-mode off; ring ticks during the drag are ignored. Under the hood the
-overlay is moved through a named pipe (`tablet-overlay.py --fifo`, the
-lines `waiting` and `solid` switch its border), the ring resize uses the
-same pipe instead of respawning the overlay, the toggle script's `suspend`
-and `resume` modes bracket the drag, and a marker file that the daemon
-keeps fresh tells the toggle that the press is a move.
+and the mapping return to the old area. A press before the hold has passed
+still switches the mode off; ring ticks during the drag are ignored.
+
+The hold time has no floor. At 0 s a touch starts the drag at once and
+every press of the key is a move, so the way out of the mode is the long
+press: keep the key pressed for the long-press time (the second field,
+`LONG`, default 1 s, 0 disables it) after such a move and precision mode
+switches off. The area lands at the press first, because the compositor
+fires the toggle on the key-down; the mode leaves when the time is up.
+
+Under the hood the overlay is moved through a named pipe
+(`tablet-overlay.py --fifo`, the lines `waiting` and `solid` switch its
+border), the ring resize uses the same pipe instead of respawning the
+overlay, the toggle script's `suspend` and `resume` modes bracket the drag,
+a marker file that the daemon keeps fresh tells the toggle that the press is
+a move, and a lock file keeps two runs of the toggle script from
+interleaving when the daemon's long-press toggle follows the compositor's.
 
 ## For contributors and AI agents
 
 `PROJECT_MAP.md` says what each file is for, how the processes talk to each
 other (the runtime files, the conf keys, the overlay's pipe) and lists every
 chunk marker (`# ── chunk: <name>`), so you can grep instead of read.
-`tests/run_all.sh` runs every gate in about 25 s without a tablet: compile,
+`tests/run_all.sh` runs every gate in about a minute without a tablet: compile,
 shell syntax, the map check, and two rigs that drive the toggle script and the
 hover daemon with fakes.
 

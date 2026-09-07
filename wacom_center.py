@@ -2,9 +2,10 @@
 # Wacom Center - one window for the drawing-tablet settings Plasma scatters.
 # Part of plasma-wacom-center (MIT).
 #
-# Precision tab: area size (% of screen width, tablet-shaped) and dim
-#   strength, written to ~/.config/tabprec.conf, which tablet-precision.sh
-#   sources on every toggle.
+# Precision tab: area size (% of screen width, tablet-shaped), dim strength,
+#   the hold time of the area drag and the long-press time that leaves the
+#   mode (seconds, no floor), written to ~/.config/tabprec.conf, which
+#   tablet-precision.sh sources on every toggle and tablet-hover.py re-reads.
 # Pad buttons tab: the express keys' injected chords, read/written to
 #   kcminputrc [ButtonRebinds] (the same mechanism the system page uses).
 #   Letters/digits get a layout warning: injected letter chords die under
@@ -59,7 +60,7 @@ def detect_devices():
 
 # ── chunk: read_conf
 def read_conf():
-    values = {"SCALE": 0.7071, "DIM": 0.35, "HOLD": 0.6}
+    values = {"SCALE": 0.7071, "DIM": 0.35, "HOLD": 0.6, "LONG": 1.0}
     try:
         for line in CONF.read_text().splitlines():
             key, _, val = line.partition("=")
@@ -71,16 +72,16 @@ def read_conf():
 
 
 # ── chunk: write_conf
-def write_conf(scale, dim, hold):
-    """Update SCALE, DIM and HOLD in place; every other line (touch-preview
-    keys, comments) stays."""
+def write_conf(scale, dim, hold, long_press):
+    """Update SCALE, DIM, HOLD and LONG in place; every other line
+    (touch-preview keys, comments) stays."""
     try:
         rest = [l for l in CONF.read_text().splitlines()
-                if l.split("=", 1)[0].strip() not in ("SCALE", "DIM", "HOLD")]
+                if l.split("=", 1)[0].strip() not in ("SCALE", "DIM", "HOLD", "LONG")]
     except OSError:
         rest = []
-    CONF.write_text("\n".join([f"SCALE={scale:.4f}", f"DIM={dim:.2f}", f"HOLD={hold:.1f}"]
-                              + rest) + "\n")
+    CONF.write_text("\n".join([f"SCALE={scale:.4f}", f"DIM={dim:.2f}", f"HOLD={hold:.2f}",
+                               f"LONG={long_press:.2f}"] + rest) + "\n")
 
 
 # ── chunk: kread
@@ -119,30 +120,31 @@ class PrecisionTab(QWidget):
         self.dim = QSlider(Qt.Orientation.Horizontal)
         self.dim.setRange(0, 80)
         self.dim.setValue(round(conf["DIM"] * 100))
+        self.hold = self.seconds_field(conf["HOLD"])
+        self.long_press = self.seconds_field(conf["LONG"])
         hold_row = QHBoxLayout()
-        hold_row.addWidget(QLabel("Hold the precision key this long to start dragging the area:"))
-        self.hold = QDoubleSpinBox()
-        self.hold.setRange(0.3, 3.0)
-        self.hold.setSingleStep(0.1)
-        self.hold.setDecimals(1)
-        self.hold.setSuffix(" s")
-        self.hold.setLocale(QLocale.c())          # dot decimal like the conf file, whatever the desktop locale
-        self.hold.setKeyboardTracking(False)      # save on Enter, focus-out or a step, not per keystroke
-        self.hold.setValue(conf["HOLD"])
+        hold_row.addWidget(QLabel("Rest a finger on the precision key this long to start "
+                                  "dragging the area (0 = at once):"))
         hold_row.addWidget(self.hold)
         hold_row.addStretch()
+        long_row = QHBoxLayout()
+        long_row.addWidget(QLabel("Keep it pressed this long after a move to leave precision "
+                                  "mode (0 = never):"))
+        long_row.addWidget(self.long_press)
+        long_row.addStretch()
         toggle = QPushButton("Toggle precision now")
         toggle.clicked.connect(lambda: subprocess.Popen([str(TOGGLE)]))
         hint = QLabel("Wacom-style placement: the cursor stays put on toggle, "
                       "the area keeps the tablet's own proportions (no stretch "
                       "inside it) and never leaves the screen. Size and dim apply "
-                      "on the next toggle or ring tick, the hold time within two "
+                      "on the next toggle or ring tick, the two times within two "
                       "seconds.")
         hint.setWordWrap(True)
 
         for w in (self.size_label, self.size, self.dim_label, self.dim):
             layout.addWidget(w)
         layout.addLayout(hold_row)
+        layout.addLayout(long_row)
         for w in (toggle, hint):
             layout.addWidget(w)
         layout.addStretch()
@@ -150,7 +152,21 @@ class PrecisionTab(QWidget):
             slider.valueChanged.connect(self.update_labels)
             slider.sliderReleased.connect(self.save)
         self.hold.valueChanged.connect(self.save)
+        self.long_press.valueChanged.connect(self.save)
         self.update_labels()
+
+    @staticmethod
+    def seconds_field(value):
+        """A time in seconds: 2 decimals, from 0 (no floor - the conf takes any value), dot decimal."""
+        box = QDoubleSpinBox()
+        box.setRange(0.0, 60.0)
+        box.setSingleStep(0.05)
+        box.setDecimals(2)
+        box.setSuffix(" s")
+        box.setLocale(QLocale.c())          # dot decimal like the conf file, whatever the desktop locale
+        box.setKeyboardTracking(False)      # save on Enter, focus-out or a step, not per keystroke
+        box.setValue(value)
+        return box
 
     def update_labels(self):
         pct = self.size.value()
@@ -166,7 +182,8 @@ class PrecisionTab(QWidget):
         self.dim_label.setText(f"Dim strength outside the area: {self.dim.value()}%")
 
     def save(self):
-        write_conf(self.size.value() / 100, self.dim.value() / 100, self.hold.value())
+        write_conf(self.size.value() / 100, self.dim.value() / 100, self.hold.value(),
+                   self.long_press.value())
 
 
 # ── chunk: PadTab

@@ -86,6 +86,15 @@ PID2=$(cat "$RD/overlay.pid")
 check "5 on: new overlay alive"         '[ "$PID2" != "$PID1" ] && [ -d "/proc/$PID2" ] && [ "$(grep -c SPAWN "$FAKE_LOG")" -eq 2 ]'
 "$T" toggle; sleep 0.4
 check "5 off again"                     '[ ! -f "$RD/saved-area" ] && [ ! -d "/proc/$PID2" ]'
+
+# 6: runs are serialized: a toggle waits for the lock another run holds; the overlay it spawns
+#    must not inherit the lock (or the OFF toggle would wait 5 s and give up).
+( flock 9; sleep 1.2 ) 9>"$RD/lock" &
+sleep 0.2; t0=$(date +%s%N); "$T" toggle; t1=$(date +%s%N); wait
+check "6 toggle waited for the lock (>= 0.8 s)" '[ $(( (t1 - t0) / 1000000 )) -ge 800 ] && [ -f "$RD/saved-area" ]'
+PID3=$(cat "$RD/overlay.pid")
+t0=$(date +%s%N); "$T" toggle; t1=$(date +%s%N); sleep 0.4
+check "6 off again in under 2 s: the overlay did not hold the lock" '[ $(( (t1 - t0) / 1000000 )) -lt 2000 ] && [ ! -f "$RD/saved-area" ] && [ ! -d "/proc/$PID3" ]'
 check "no notifications (no errors)"    '! grep -q notify-send "$STUB_LOG"'
 
 echo "failures: $FAILS"

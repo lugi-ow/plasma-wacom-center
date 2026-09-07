@@ -165,8 +165,9 @@ check("C resting 1.4 s after the press: no new relocation, marker not refreshed"
 report(touch=0)
 time.sleep(0.25)
 check("C lift after a press: no snap back, marker still there", len(lines) == n and MARK.exists())
-check("C confirm: no resume (the toggle maps the new area); suspend 2, resume 1",
-      ghost().count("CALL suspend") == 2 and ghost().count("CALL resume") == 1)
+check("C confirm: no resume (the toggle maps the new area), no long press; suspend 2, resume 1",
+      ghost().count("CALL suspend") == 2 and ghost().count("CALL resume") == 1
+      and "CALL toggle" not in ghost())
 MARK.unlink()                              # the toggle would have consumed it
 
 # --- D: a quick press while ON (toggle off) never relocates ---
@@ -205,6 +206,61 @@ check("G conf edited mid-rest: the drag still starts", MARK.exists() and len(lin
 report(touch=0)
 time.sleep(0.25)
 check("G lift snaps home", lines[-2:] == [HOME, "solid"] and not MARK.exists())
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\n")
+time.sleep(2.6)
+
+# --- H: no floor on HOLD, and the LONG PRESS out of precision mode ---
+calls = lambda: ghost().count("CALL toggle")
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0\n")
+time.sleep(2.6)
+n = len(lines)
+report(touch=0x80)
+time.sleep(0.1)
+check("H HOLD=0: the drag starts at the first touch report", MARK.exists() and len(lines) == n + 2)
+report(touch=0)
+time.sleep(0.25)
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\n")     # LONG absent: the 1.0 s default
+time.sleep(2.6)
+report(touch=0x80)
+time.sleep(0.9)
+check("H drag on, no toggle call so far", MARK.exists() and calls() == 0)
+report(touch=0x80, press=0x80)            # the press lands the area (KWin's toggle, not modelled) and stays down
+time.sleep(0.5)
+check("H pressed 0.5 s: no exit yet", calls() == 0)
+time.sleep(0.7)
+check("H pressed 1.2 s: the daemon toggles precision mode off, once", calls() == 1)
+report(touch=0x80, press=0)               # released, finger resting
+time.sleep(1.3)
+check("H after the release: no further toggle", calls() == 1)
+report(touch=0)
+time.sleep(0.25)
+MARK.unlink(missing_ok=True)
+report(touch=0x80)                        # a short press after a drag: a move, no exit
+time.sleep(0.9)
+report(touch=0x80, press=0x80)
+time.sleep(0.3)
+report(touch=0x80, press=0)
+time.sleep(1.2)
+check("H short press after a drag: no exit", calls() == 1)
+report(touch=0)
+time.sleep(0.25)
+MARK.unlink(missing_ok=True)
+report(touch=0x80)                        # a press before any drag (the toggle itself switches off): never armed
+report(touch=0x80, press=0x80)
+time.sleep(1.4)
+check("H press before a drag, held 1.4 s: not armed", calls() == 1 and not MARK.exists())
+report(touch=0)
+time.sleep(0.25)
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=0\n")
+time.sleep(2.6)
+report(touch=0x80)
+time.sleep(0.9)
+report(touch=0x80, press=0x80)
+time.sleep(1.4)
+check("H LONG=0: a press held 1.4 s after a drag does not exit", calls() == 1)
+report(touch=0)
+time.sleep(0.25)
+MARK.unlink(missing_ok=True)
 CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\n")
 time.sleep(2.6)
 

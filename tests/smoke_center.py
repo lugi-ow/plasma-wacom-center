@@ -10,6 +10,8 @@ from PyQt6.QtWidgets import QApplication
 app = QApplication([])
 args = [1.5135] if "aspect" in wc.PrecisionTab.__init__.__code__.co_varnames else []
 tab = wc.PrecisionTab(*args)
-print("hold shown:", tab.hold.value(), "| text:", tab.hold.text(), "| range:", tab.hold.minimum(), tab.hold.maximum())
-tab.hold.setValue(0.8)
-print("conf after setting 0.8:", conf.read_text().replace("\n", " | "))
+for name, box in (("hold", tab.hold), ("long press", tab.long_press)):
+    print(f"{name} shown: {box.value()} | text: {box.text()} | range: {box.minimum()} {box.maximum()}")
+tab.hold.setValue(0.05)                  # below the old 0.3 floor: must stick
+tab.long_press.setValue(0.0)
+print("conf after hold 0.05, long 0:", conf.read_text().replace("\n", " | "))

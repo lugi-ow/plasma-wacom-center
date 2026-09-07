@@ -26,6 +26,15 @@
 # the toggle that the coming press is a move, not an OFF. All three live in
 # $XDG_RUNTIME_DIR/tabprec next to the toggle's state file.
 #
+# HOLD has no floor. At 0 every touch starts a drag at once and every press
+# is a move, so the way OUT is the LONG PRESS: keep the key pressed for LONG
+# seconds after a press that confirmed a drag (conf key, default 1.0, the
+# second Wacom Center field; 0 switches the long press off) and precision
+# mode goes off. The area lands at the press first - KWin fires the toggle
+# on the key-down and nothing can hold that back - and the daemon runs the
+# toggle again LONG later; the toggle script serializes its runs with a
+# lock, so the two land in a row whatever their timing.
+#
 # The kernel never exposes the touch sense: its Bluetooth pad parser reads
 # only the key, centre-button and ring bytes of report 0x80, and the
 # EXPRESSKEYCAP HID usage is unmapped. So this reads the tablet's raw HID
@@ -71,6 +80,7 @@ MARK = RD / "relocate"              # kept fresh while the overlay follows the p
 DIR = Path(__file__).resolve().parent
 SHOW_DELAY = 0.06                    # touch sense must hold this long before the ghost (debounce)
 HOLD_DEFAULT = 0.6                   # ...and this long before a relocation (precision on); conf key HOLD, Wacom Center field
+LONG_DEFAULT = 1.0                   # a press that confirmed a drag, kept down this long, switches precision mode off; conf key LONG, 0 = off
 RESCAN = 2.0                        # seconds between checks for new/lost nodes and conf edits
 TICK = 0.03                          # poll period while a rectangle follows the pen or a press is being judged
 LEARN_WINDOW = 2.0                   # a precision toggle this soon after a one-key press names the key
@@ -155,13 +165,24 @@ def as_int(text, default=None):
 # ── chunk: hold_delay
 def hold_delay(conf):
     """Seconds a finger must rest before anything moves: the ghost debounce
-    with precision mode off, the relocation hold (conf HOLD) with it on."""
+    with precision mode off, the relocation hold (conf HOLD, no floor: 0 =
+    at the first touch report) with it on."""
     if not STATE.exists():
         return SHOW_DELAY
     try:
-        return max(0.3, float(conf.get("HOLD", HOLD_DEFAULT)))
+        return max(0.0, float(conf.get("HOLD", HOLD_DEFAULT)))
     except ValueError:
         return HOLD_DEFAULT
+
+
+# ── chunk: long_delay
+def long_delay(conf):
+    """Seconds a press that confirmed a drag must stay down to switch
+    precision mode off (conf LONG); 0 or less = no long press."""
+    try:
+        return float(conf.get("LONG", LONG_DEFAULT))
+    except ValueError:
+        return LONG_DEFAULT
 
 
 # ── chunk: layout_for
@@ -239,7 +260,7 @@ def pen_norm(fd):
 
 # ── chunk: toggle
 def toggle(mode):
-    """Run tablet-precision.sh MODE (suspend / resume); False when it failed."""
+    """Run tablet-precision.sh MODE (suspend / resume / toggle); False when it failed."""
     try:
         return subprocess.run([str(DIR / "tablet-precision.sh"), mode], timeout=5,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
@@ -395,6 +416,7 @@ def watch(conf, follower):
     pending = {}                      # fd -> time the touch began; None once acted on
     held = set()                      # fds whose key was pressed: nothing more until the finger leaves it
     down = {}                         # fd -> last press-byte value
+    long_press = {}                   # fd -> deadline while a key pressed after a drag stays down: precision mode off at the deadline
     learn = None                      # (key bit, deadline, precision was on) after a one-key press
     last_scan = time.monotonic()
     try:
@@ -404,6 +426,8 @@ def watch(conf, follower):
             for since in pending.values():
                 if since is not None:
                     timeout = min(timeout, max(0.0, since + hold_delay(conf) - now))
+            for deadline in long_press.values():
+                timeout = min(timeout, max(0.0, deadline - now))
             if follower.up or learn:
                 timeout = min(timeout, TICK)
             ready, _, _ = select.select(list(fds), [], [], timeout)
@@ -419,6 +443,7 @@ def watch(conf, follower):
                     pending.pop(fd, None)
                     held.discard(fd)
                     down.pop(fd, None)
+                    long_press.pop(fd, None)
                     follower.hide(fd)
                     continue
                 if report[0] != lay["report"] or len(report) <= lay["touch"]:
@@ -435,12 +460,17 @@ def watch(conf, follower):
                 pressed = bool(press_bits & (lay["press_mask"] or lay["mask"]))
                 if pressed:                     # the toggle takes over: ghost closes, a relocation is confirmed
                     pending.pop(fd, None)
+                    if fd not in held and follower.up and follower.owner == fd \
+                            and follower.home is not None and long_delay(conf) > 0:
+                        long_press[fd] = time.monotonic() + long_delay(conf)   # kept down: precision mode off
                     held.add(fd)
                     follower.hide(fd, confirmed=True)
                 elif touched:
+                    long_press.pop(fd, None)    # released, the finger still rests
                     if fd not in held:
                         pending.setdefault(fd, time.monotonic())
                 else:                           # finger off the key: ghost closes, a relocation snaps back
+                    long_press.pop(fd, None)
                     held.discard(fd)
                     pending.pop(fd, None)
                     follower.hide(fd)
@@ -465,6 +495,12 @@ def watch(conf, follower):
                 if since is not None and now - since >= hold_delay(conf):
                     (follower.move if STATE.exists() else follower.show)(fd)
                     pending[fd] = None          # up (or refused); no timer until the next touch
+            for fd, deadline in list(long_press.items()):
+                if now >= deadline:             # the key stayed down after the move: leave precision mode
+                    del long_press[fd]
+                    log("long press: precision mode off")
+                    if not toggle("toggle"):
+                        log("long press: the toggle failed, precision mode stays on")
             if follower.up:
                 follower.follow()
             if now - last_scan >= RESCAN:

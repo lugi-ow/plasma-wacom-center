@@ -34,6 +34,8 @@
 # The overlay is spawned once per ON with --fifo $RD/overlay.fifo and then
 # MOVED through that pipe on a resize or a move (no respawn, no flicker);
 # the geometry of the current mapping is kept in $RD/area for the daemon.
+# Runs are serialized with flock on $RD/lock: two runs never interleave (a
+# long press on the pad key = KWin's MOVE toggle, then the daemon's OFF).
 #
 # Config: ~/.config/tabprec.conf - SCALE (0.05-0.80 of screen width), DIM
 # (0-0.8). Wacom Center and tablet-precision-size.sh write it. Silent by
@@ -63,6 +65,7 @@ IF=org.kde.KWin.InputDevice
 SCR=org.kde.kwin.Scripting
 RD="${XDG_RUNTIME_DIR:-/tmp}/tabprec"
 mkdir -p "$RD"
+exec 9>"$RD/lock"; flock -w 5 9 || exit 1   # one run at a time: a long press makes KWin's MOVE toggle and the daemon's OFF toggle land in a row
 DIR=$(cd "$(dirname "$0")" && pwd)
 STATE="$RD/saved-area"
 FIFO="$RD/overlay.fifo"    # the live overlay reads "X Y W H DIM" lines from it
@@ -142,7 +145,7 @@ apply_area() {  # map the computed area (W H X Y FX FY FW FH SW SH), record it, 
         return 0                 # the overlay is alive and took the new geometry
     fi
     [ -f "$RD/overlay.pid" ] && kill "$(cat "$RD/overlay.pid")" 2>/dev/null
-    nohup python3 "$DIR/tablet-overlay.py" "$X" "$Y" "$W" "$H" "$DIM" --fifo "$FIFO" > "$RD/overlay.log" 2>&1 &
+    nohup python3 "$DIR/tablet-overlay.py" "$X" "$Y" "$W" "$H" "$DIM" --fifo "$FIFO" > "$RD/overlay.log" 2>&1 9>&- &   # 9>&-: the overlay must not inherit the lock
     echo $! > "$RD/overlay.pid"
 }
 

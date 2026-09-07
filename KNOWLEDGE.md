@@ -101,6 +101,15 @@ Use `capStyle: ShapePath.FlatCap`, or the default square caps stretch every
 dash by a pen width at each end. `qml6-module-qtquick-shapes` is a
 dependency of plasma-desktop, so it is on every Plasma 6 system.
 
+**Two runs of the same script can overlap.** A long press on the pad key
+means KWin's shortcut runs the toggle on the key-down and the daemon runs
+it again later; with a short long-press time they overlap, and two
+interleaved runs leave the mapping set by one and the state files removed
+by the other. `flock` on a runtime file at the top of the script
+(`exec 9>lock; flock -w 5 9`) serializes them, with one trap: the overlay
+the script spawns with `nohup … &` inherits descriptor 9 and would hold
+the lock for as long as it lives. Close it on the spawn (`9>&-`).
+
 **Rendering a layer-shell QML file without a display** works for tests:
 `QT_QPA_PLATFORM=offscreen`, load it, `grabWindow()` on the root
 (LayerShellQt only warns "not a wayland window"). In PyQt6 the root comes

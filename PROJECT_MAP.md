@@ -15,7 +15,7 @@ markers do not. `tests/check_map.py` keeps this file and the markers in step;
 |---|---|---|---|
 | `tablet-precision.sh` | the pad key's chord (a KWin global shortcut), the ring script, the hover daemon, Wacom Center | one run per call, ~150 ms | KWin D-Bus (`outputArea`), the runtime files, the overlay's pipe |
 | `tablet-overlay.py` + `.qml` | the toggle (the precision overlay, `--fifo`), the daemon (the ghost, `--waiting --follow`) | precision: ON to OFF; ghost: touch to lift | its pipe or its stdin |
-| `tablet-hover.py` | the autostart entry (install.sh) | always | every Wacom hidraw node, the pen's evdev node, the toggle (`where`, `suspend`, `resume`), the overlay pipe, the conf |
+| `tablet-hover.py` | the autostart entry (install.sh) | always | every Wacom hidraw node, the pen's evdev node, the toggle (`where`, `suspend`, `resume`, `toggle` on a long press), the overlay pipe, the conf |
 | `tablet-precision-size.sh` | the ring's two chords | one run per tick | the conf (SCALE), the relocate marker, the toggle (`resize`, mode on) or the size preview (mode off) |
 | `tablet-size-preview.py` (+ `tablet-overlay.qml`) | the ring script, mode off, when none is running | until 1.2 s after the last conf change, or at once when the mode comes on | the conf (mtime), the state file |
 | `tablet-pie.sh` → `tablet-pointer-warp.py` → `kando` | a pad key's chord | one run | `/dev/uinput`, KWin's device list |
@@ -38,10 +38,12 @@ Runtime files live in `$XDG_RUNTIME_DIR/tabprec/` (`$RD` below). The conf is
 | `$RD/overlay.pid` | `apply_area` | `apply_area` (alive?), toggle OFF (kill) | pid of the precision overlay |
 | `$RD/overlay.fifo` | created by the overlay (`--fifo`, held O_RDWR); written by `apply_area` and the daemon | the overlay | lines `X Y W H [DIM]` (move), `waiting` / `solid` (the border); applied in order, under PIPE_BUF |
 | `$RD/relocate` | the daemon: touched at the hold, then at 30 Hz while dragging; removed on a cancel | the toggle: younger than 3 s = MOVE instead of OFF; the ring script: younger than 3 s = the tick does nothing | its mtime is the message; never deleted on a press |
+| `$RD/lock` | every run of the toggle script (`flock`) | — | one run at a time; the spawned overlay closes the descriptor (`9>&-`) |
 | `$RD/preview.pid`, `overlay.log`, `preview.log`, `probe.js` | the ring script / the toggle | the ring script / nobody | housekeeping |
 | conf `SCALE` | Wacom Center, the ring script | the toggle (every run), the size preview | 0.05–0.80 of the screen width |
 | conf `DIM` | Wacom Center | the toggle, the size preview | 0–0.8 |
-| conf `HOLD` | Wacom Center | the daemon (re-read within 2 s) | seconds before a drag; min 0.3, default 0.6 |
+| conf `HOLD` | Wacom Center | the daemon (re-read within 2 s) | seconds a resting finger waits before a drag; no floor (0 = at once), default 0.6 |
+| conf `LONG` | Wacom Center | the daemon (re-read within 2 s) | seconds a press that confirmed a drag stays down to leave the mode; 0 = never, default 1.0 |
 | conf `HOVER_MASK` | the daemon (learned) | the daemon | the precision key's bit |
 | conf `HOVER_REPORT`, `HOVER_BYTE`, `PRESS_BYTE`, `PRESS_MASK` (+ `_USB` / `_BT`) | you, for an unknown model (from the probe) | the daemon | report layout overrides |
 | KWin `outputArea` | the toggle only | — | the pen's mapping; the device's `size` gives the tablet's aspect |
@@ -61,10 +63,15 @@ the preview ghost (a finger resting on the key, mode off), the size preview
 (a ring tick, mode off) and the PrM ghost (the real overlay while it is
 dragged, mode on), which turns solid again on the press or the lift.
 
-Timings: ghost debounce 0.06 s, drag hold `HOLD`, pen poll 30 Hz, node and
-conf rescan 2 s, key-learn window 2 s, marker freshness 3 s, pipe write
-timeout 1 s, size preview hold 1.2 s and fade 0.45 s, dash flow 0.3 s per
-period.
+Timings: ghost debounce 0.06 s, drag hold `HOLD` (no floor), long press
+`LONG`, pen poll 30 Hz, node and conf rescan 2 s, key-learn window 2 s,
+marker freshness 3 s, pipe write timeout 1 s, lock wait 5 s, size preview
+hold 1.2 s and fade 0.45 s, dash flow 0.3 s per period.
+
+The long press: KWin fires the toggle on the key-down, so a press during a
+drag always lands the area (MOVE); if the key then stays down for `LONG`,
+the daemon runs the toggle again (OFF). The lock makes the two land in a
+row whatever their timing.
 
 ## Files
 
@@ -73,7 +80,7 @@ Modes `toggle` (default), `resize`, `where`, `suspend`, `resume`. Finds the pen
 through KWin's device list on every run, reads the pen position from
 `tablet-pen-pos.py` (the mouse as fallback, through a one-shot KWin script),
 computes the area, sets `outputArea`, then moves or spawns the overlay.
-- **chunk: `config-and-paths`** — conf sourcing with defaults, the D-Bus names, the runtime dir and its file names.
+- **chunk: `config-and-paths`** — conf sourcing with defaults, the D-Bus names, the runtime dir and its file names, the run lock (`flock`, 5 s wait).
 - **chunk: `note`** — notify-send wrapper; only errors notify.
 - **chunk: `kload`** / **`kunload`** — load and unload the one-shot KWin script of the mouse fallback.
 - **chunk: `pen-lookup`** — the pen's KWin device sysname; notifies and exits when there is none.
@@ -129,15 +136,16 @@ press followed by a toggle. Report layouts per product id, conf keys override.
 - **chunk: `log`** — stderr line with the `tablet-hover:` prefix (the journal under autostart).
 - **chunk: `read_conf`** / **`conf_stamp`** / **`save_conf_key`** — the conf as a dict; its mtime; set one key keeping the rest.
 - **chunk: `as_int`** — int() that accepts 0x.. and returns a default.
-- **chunk: `hold_delay`** — the wait before anything moves: 0.06 s ghost debounce, or conf HOLD (min 0.3) with precision ON.
+- **chunk: `hold_delay`** — the wait before anything moves: 0.06 s ghost debounce, or conf HOLD (no floor) with precision ON.
+- **chunk: `long_delay`** — conf LONG: how long a press that confirmed a drag stays down before the mode goes off; 0 = never.
 - **chunk: `FAMILIES`** / **`MODELS`** — built-in report layouts per family and bus; product id → family.
 - **chunk: `layout_for`** — one node's layout: conf overrides over built-ins; mask None until learned.
 - **chunk: `wacom_nodes`** — every Wacom hidraw node with its bus and product id, from sysfs.
 - **chunk: `pen_open`** / **`pen_norm`** — the pen's evdev fd; its normalized position from EVIOCGABS.
-- **chunk: `toggle`** — runs `tablet-precision.sh MODE` (suspend / resume) and reports success.
+- **chunk: `toggle`** — runs `tablet-precision.sh MODE` (suspend / resume / toggle) and reports success.
 - **chunk: `Follower`** — the rectangle that follows the pen: `show` (ghost), `move` (drag, sends `waiting`), `follow` (tick), `hide` (cancel or confirm, sends `solid`).
 - **chunk: `mask_text`** — "not learned yet" or the hex mask, for the log.
-- **chunk: `watch`** — the loop: hidraw reports → touch, press, lift; the hold timer; learning; rescans; a conf edit is reloaded in place.
+- **chunk: `watch`** — the loop: hidraw reports → touch, press, lift; the hold timer; the long-press timer (OFF through the toggle); learning; rescans; a conf edit is reloaded in place.
 - **chunk: `main`** — `--simulate`, or watch forever (sleeping while no tablet is connected).
 
 ### `tablet-precision-size.sh` — one ring tick: SCALE ± 2 %
@@ -184,23 +192,24 @@ it lands on the same physical spot on a scaled display.
 ### `wacom_center.py` — the settings window
 - **chunk: `paths`** — the conf path, the toggle path, and the launcher table (personal copy) or the KWin names (public copy).
 - **chunk: `busget`** / **`detect_devices`** — KWin property reads; the pad name and the tablet aspect by capability. *(public copy only)*
-- **chunk: `read_conf`** / **`write_conf`** — SCALE, DIM, HOLD with defaults; write them keeping every other line.
+- **chunk: `read_conf`** / **`write_conf`** — SCALE, DIM, HOLD, LONG with defaults; write them keeping every other line.
 - **chunk: `kread`** / **`kwrite`** — a pad key's chord in `kcminputrc [ButtonRebinds]`.
 - **chunk: `set_launcher_shortcut`** — keeps the shortcut daemon in step with the two launcher keys. *(personal copy only)*
-- **chunk: `PrecisionTab`** — the size and dim sliders, the hold field, the toggle button; saves on release or change.
+- **chunk: `PrecisionTab`** — the size and dim sliders, the hold and long-press fields (seconds, 2 decimals, from 0), the toggle button; saves on release or change.
 - **chunk: `PadTab`** — one chord field per key, validation, the layout warning, apply.
 - **chunk: `main`** — the window, the tabs, the two launcher buttons.
 
 ### `tests/` — the gates
-`run_all.sh` runs everything (~35 s; no Qt, no tablet, no KWin): `py_compile`,
+`run_all.sh` runs everything (~60 s; no Qt, no tablet, no KWin): `py_compile`,
 `bash -n`, `check_map.py`, then `test_script.sh` (the toggle through on, move,
-resize around the centre with the clamp, suspend, resume and off, with a
-stubbed `busctl` and a fake overlay), `test_size.sh` (the ring script: the
-step and its clamps, the resize only with the mode on, the preview only with
-it off, nothing while the marker is fresh; a stub toggle and a fake preview)
-and `test_hover.py` (the daemon with a named pipe as the pad, a fake pen, fake
-overlays and a fake toggle that logs suspend and resume; the `waiting` /
-`solid` lines; a conf edit mid-rest). Every rig takes
+resize around the centre with the clamp, suspend, resume and off, the run
+lock, with a stubbed `busctl` and a fake overlay), `test_size.sh` (the ring
+script: the step and its clamps, the resize only with the mode on, the
+preview only with it off, nothing while the marker is fresh; a stub toggle
+and a fake preview) and `test_hover.py` (the daemon with a named pipe as the
+pad, a fake pen, fake overlays and a fake toggle that logs its modes; the
+`waiting` / `solid` lines; a conf edit mid-rest; HOLD 0; the long press and
+what must not arm it). Every rig takes
 `<scratch dir> <script path>`. `add_markers.py <dir> [out dir]` puts a marker
 above every new def, function or mode (idempotent; block markers are listed
 inside it). `smoke_center.py <wacom_center.py> <scratch dir>` builds the
