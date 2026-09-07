@@ -15,7 +15,7 @@ printf '#!/usr/bin/env python3\nimport os, time\nopen(os.environ["FAKE_LOG"], "a
 chmod +x "$S/bin/"*
 export XDG_RUNTIME_DIR="$S/rd" XDG_CONFIG_HOME="$S/conf" FAKE_LOG="$S/calls.log"
 CONF="$S/conf/tabprec.conf"
-printf 'SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\n' > "$CONF"
+printf 'SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nRING_STEP=2\n' > "$CONF"   # 2 points a tick for the arithmetic below
 RD="$S/rd/tabprec"
 T="$S/bin/tablet-precision-size.sh"
 FAILS=0
@@ -68,7 +68,7 @@ check "7 RING_STEP line kept"                 'grep -qx "RING_STEP=5" "$CONF"'
 sed -i 's/^RING_STEP=.*/RING_STEP=0.5/' "$CONF"; "$T" down; sleep 0.3
 check "7 RING_STEP=0.5: 0.34 -> 0.3350"       'grep -qx "SCALE=0.3350" "$CONF"'
 sed -i 's/^RING_STEP=.*/RING_STEP=junk/' "$CONF"; "$T" up; sleep 0.3
-check "7 RING_STEP=junk: the 2-point default"  'grep -qx "SCALE=0.3550" "$CONF"'
+check "7 RING_STEP=junk: the half-point default" 'grep -qx "SCALE=0.3400" "$CONF"'
 
 echo "failures: $FAILS"
 [ "$FAILS" -eq 0 ]

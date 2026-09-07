@@ -12,8 +12,7 @@
 # activated).
 #
 # With precision mode already ON the same key RELOCATES it. Rest the finger
-# for HOLD seconds (conf key, default 0.6, the Wacom Center field - long
-# enough that a normal press still switches the mode off) and the REAL
+# for HOLD seconds (conf key, default 0.15, the Wacom Center field) and the REAL
 # overlay, the precision UI itself and not the ghost, starts following the
 # pen with the same placement math and the ghost's flowing border (the
 # pipe lines "waiting" / "solid") while the pen gets the base mapping back
@@ -28,7 +27,7 @@
 #
 # HOLD has no floor. At 0 every touch starts a drag at once and every press
 # is a move, so the way OUT is the LONG PRESS: keep the key pressed for LONG
-# seconds after a press that confirmed a drag (conf key, default 1.0, the
+# seconds after a press that confirmed a drag (conf key, default 0.7, the
 # second Wacom Center field; 0 switches the long press off) and precision
 # mode goes off. The area lands at the press first - KWin fires the toggle
 # on the key-down and nothing can hold that back - and the daemon runs the
@@ -79,8 +78,8 @@ FIFO = RD / "overlay.fifo"          # the live overlay's geometry pipe (tablet-o
 MARK = RD / "relocate"              # kept fresh while the overlay follows the pen: the toggle moves (< 3 s old) instead of switching off
 DIR = Path(__file__).resolve().parent
 SHOW_DELAY = 0.06                    # touch sense must hold this long before the ghost (debounce)
-HOLD_DEFAULT = 0.6                   # ...and this long before a relocation (precision on); conf key HOLD, Wacom Center field
-LONG_DEFAULT = 1.0                   # a press that confirmed a drag, kept down this long, switches precision mode off; conf key LONG, 0 = off
+HOLD_DEFAULT = 0.15                  # ...and this long before a relocation (precision on); conf key HOLD, Wacom Center field
+LONG_DEFAULT = 0.7                   # a press that confirmed a drag, kept down this long, switches precision mode off; conf key LONG, 0 = off
 RESCAN = 2.0                        # seconds between checks for new/lost nodes and conf edits
 TICK = 0.03                          # poll period while a rectangle follows the pen or a press is being judged
 LEARN_WINDOW = 2.0                   # a precision toggle this soon after a one-key press names the key

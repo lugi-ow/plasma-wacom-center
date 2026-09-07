@@ -41,11 +41,11 @@ Runtime files live in `$XDG_RUNTIME_DIR/tabprec/` (`$RD` below). The conf is
 | `$RD/lock` | every run of the toggle script (`flock`) | — | one run at a time; the spawned overlay closes the descriptor (`9>&-`) |
 | `$RD/pen` | the toggle, after a walk over KWin's device list | the toggle (every run that needs the pen) | the pen's KWin sysname; one `name` call confirms it, a stale one triggers a new walk |
 | `$RD/preview.pid`, `overlay.log`, `preview.log`, `probe.js` | the ring script / the toggle | the ring script / nobody | housekeeping |
-| conf `SCALE` | Wacom Center, the ring script | the toggle (every run), the size preview | 0.05–0.80 of the screen width |
-| conf `DIM` | Wacom Center | the toggle, the size preview | 0–0.8 |
-| conf `HOLD` | Wacom Center | the daemon (re-read within 2 s) | seconds a resting finger waits before a drag; no floor (0 = at once), default 0.6 |
-| conf `LONG` | Wacom Center | the daemon (re-read within 2 s) | seconds a press that confirmed a drag stays down to leave the mode; 0 = never, default 1.0 |
-| conf `RING_STEP` | Wacom Center | the ring script | percentage points of screen width per ring tick; default 2 |
+| conf `SCALE` | Wacom Center, the ring script | the toggle (every run), the size preview | 0.05–0.80 of the screen width; default 0.36 |
+| conf `DIM` | Wacom Center | the toggle, the size preview | 0–0.8; default 0.10 |
+| conf `HOLD` | Wacom Center | the daemon (re-read within 2 s) | seconds a resting finger waits before a drag; no floor (0 = at once), default 0.15 |
+| conf `LONG` | Wacom Center | the daemon (re-read within 2 s) | seconds a press that confirmed a drag stays down to leave the mode; 0 = never, default 0.7 |
+| conf `RING_STEP` | Wacom Center | the ring script | percentage points of screen width per ring tick; default 0.5 |
 | `kcminputrc` `[ButtonRebinds][TabletRing][<pad>][0]` `0=AxisKey,<up>,<down>,<threshold>` | Wacom Center (tick angle, direction), install.sh (600) | KWin | threshold = degrees per tick × 120; the ring reports 5° steps, so ≤ 600 = every step (72 ticks a turn) |
 | conf `HOVER_MASK` | the daemon (learned) | the daemon | the precision key's bit |
 | conf `HOVER_REPORT`, `HOVER_BYTE`, `PRESS_BYTE`, `PRESS_MASK` (+ `_USB` / `_BT`) | you, for an unknown model (from the probe) | the daemon | report layout overrides |
@@ -154,7 +154,7 @@ press followed by a toggle. Report layouts per product id, conf keys override.
 
 ### `tablet-precision-size.sh` — one ring tick: SCALE ± RING_STEP points
 - **chunk: `drag-guard`** — a relocate marker under 3 s old (the area is being dragged): exit, nothing changes.
-- **chunk: `step`** — SCALE ± RING_STEP/100 (conf, default 2 points; junk = 2), clamped to 0.05–0.80.
+- **chunk: `step`** — SCALE ± RING_STEP/100 (conf, default 0.5 points; junk = 0.5), clamped to 0.05–0.80.
 - **chunk: `conf-write`** — rewrites SCALE and DIM in place, keeping every other line.
 - **chunk: `resize-or-preview`** — mode on: `tablet-precision.sh resize` (the area itself, around its centre); off: the size preview unless one is running.
 
@@ -202,7 +202,7 @@ it lands on the same physical spot on a scaled display.
 - **chunk: `set_launcher_shortcut`** — keeps the shortcut daemon in step with the two launcher keys. *(personal copy only)*
 - **chunk: `PrecisionTab`** — the size and dim sliders, the hold and long-press fields (seconds, from 0), the ring step, tick angle and direction swap, the toggle button; saves on change.
 - **chunk: `PadTab`** — one chord field per key, validation, the layout warning, apply.
-- **chunk: `main`** — the window, the tabs, the two launcher buttons.
+- **chunk: `main`** — the window, the tabs (`pad` on the command line opens the second), the two launcher buttons.
 
 ### `tests/` — the gates
 `run_all.sh` runs everything (~60 s; no Qt, no tablet, no KWin): `py_compile`,

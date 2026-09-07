@@ -54,7 +54,7 @@ def tablet_aspect():
 # ── chunk: read_conf
 def read_conf():
     """(SCALE, DIM) from the conf, clamped the way the toggle clamps them."""
-    scale, dim = 0.7071, 0.35
+    scale, dim = 0.36, 0.10
     try:
         for line in CONF.read_text().splitlines():
             key, _, val = line.partition("=")

@@ -23,7 +23,7 @@ for d in (RD / "tabprec", CONFD, FAKE):
 os.environ["XDG_RUNTIME_DIR"] = str(RD)
 os.environ["XDG_CONFIG_HOME"] = str(CONFD)
 CONF = CONFD / "tabprec.conf"
-CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\n")
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\n")   # the rig's timings assume these, not the defaults
 
 spec = importlib.util.spec_from_file_location("hover", SRC)
 hover = importlib.util.module_from_spec(spec)
@@ -206,12 +206,12 @@ check("G conf edited mid-rest: the drag still starts", MARK.exists() and len(lin
 report(touch=0)
 time.sleep(0.25)
 check("G lift snaps home", lines[-2:] == [HOME, "solid"] and not MARK.exists())
-CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\n")
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\n")
 time.sleep(2.6)
 
 # --- H: no floor on HOLD, and the LONG PRESS out of precision mode ---
 calls = lambda: ghost().count("CALL toggle")
-CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0\n")
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0\nLONG=1.0\n")
 time.sleep(2.6)
 n = len(lines)
 report(touch=0x80)
@@ -219,7 +219,7 @@ time.sleep(0.1)
 check("H HOLD=0: the drag starts at the first touch report", MARK.exists() and len(lines) == n + 2)
 report(touch=0)
 time.sleep(0.25)
-CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\n")     # LONG absent: the 1.0 s default
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\n")
 time.sleep(2.6)
 report(touch=0x80)
 time.sleep(0.9)
@@ -261,7 +261,7 @@ check("H LONG=0: a press held 1.4 s after a drag does not exit", calls() == 1)
 report(touch=0)
 time.sleep(0.25)
 MARK.unlink(missing_ok=True)
-CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\n")
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\n")
 time.sleep(2.6)
 
 # --- F: no live overlay reading the pipe -> the hold does nothing ---

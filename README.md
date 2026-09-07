@@ -30,9 +30,9 @@ devices are found by capability, not by model name.
   rectangle waiting to be activated.
 - **Ring size control.** The tablet's touch ring resizes the area between
   5 and 80% of the screen width. Each tick adds or removes a number of
-  percentage points (2 by default) and a tick fires every so many degrees
-  of ring travel (5 by default, the ring's own step); both are Wacom Center
-  settings, with a switch for the direction. With precision mode off, a
+  percentage points (half a point by default) and a tick fires every so
+  many degrees of ring travel (5 by default, the ring's own step); both are
+  Wacom Center settings, with a switch for the direction. With precision mode off, a
   centred fading preview shows the prospective size; with it on, the area
   itself grows or shrinks around its centre and stays where it is. Ticks
   while the area is being dragged are ignored.
@@ -73,8 +73,8 @@ and nothing else shows.
 
 <p align="center"><img src="docs/screenshot-wacom-center-precision.png" width="400" alt="Wacom Center, Precision tab"> <img src="docs/screenshot-wacom-center-pad.png" width="400" alt="Wacom Center, Pad buttons tab"></p>
 
-Wacom Center: the size and dim sliders, and the chord editor for the
-express keys.
+Wacom Center: the size and dim sliders, the hold and long-press times, the
+ring step and tick angle; and the chord editor for the express keys.
 
 The ring preview picture is a drawing; `docs/make-images.py` renders it
 with the same geometry the scripts use. The other pictures are screenshots.
@@ -177,7 +177,7 @@ touch bits, byte 282 = press bits.
 
 With precision mode already on, the same key relocates the area. Rest a
 finger on it (the hold time field in Wacom Center, `HOLD` in
-`~/.config/tabprec.conf`, default 0.6 s, picked up without a restart): the
+`~/.config/tabprec.conf`, default 0.15 s, picked up without a restart): the
 pen gets the whole screen back for the moment, the cursor roams, and the
 real overlay travels around it with the same placement rule, wearing the
 flowing border until the press. Press the key to map the area there,
@@ -188,7 +188,7 @@ still switches the mode off; ring ticks during the drag are ignored.
 The hold time has no floor. At 0 s a touch starts the drag at once and
 every press of the key is a move, so the way out of the mode is the long
 press: keep the key pressed for the long-press time (the second field,
-`LONG`, default 1 s, 0 disables it) after such a move and precision mode
+`LONG`, default 0.7 s, 0 disables it) after such a move and precision mode
 switches off. The area lands at the press first, because the compositor
 fires the toggle on the key-down; the mode leaves when the time is up.
 

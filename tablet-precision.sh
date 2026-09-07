@@ -69,8 +69,8 @@ RD="${XDG_RUNTIME_DIR:-/tmp}/tabprec"
 mkdir -p "$RD"
 exec 9>"$RD/lock"; flock -w 5 9 || exit 1   # one run at a time: a long press makes KWin's MOVE toggle and the daemon's OFF toggle land in a row
 [ -f "$CONF" ] && . "$CONF"   # read AFTER the lock: a ring tick queued behind another applies the newest SCALE, not the one it was born with
-SCALE=${SCALE:-0.7071}
-DIM=${DIM:-0.35}
+SCALE=${SCALE:-0.36}
+DIM=${DIM:-0.10}
 DIR=$(cd "$(dirname "$0")" && pwd)
 STATE="$RD/saved-area"
 FIFO="$RD/overlay.fifo"    # the live overlay reads "X Y W H DIM" lines from it

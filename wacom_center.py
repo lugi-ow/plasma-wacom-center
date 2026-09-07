@@ -63,7 +63,7 @@ def detect_devices():
 
 # ── chunk: read_conf
 def read_conf():
-    values = {"SCALE": 0.7071, "DIM": 0.35, "HOLD": 0.6, "LONG": 1.0, "RING_STEP": 2.0}
+    values = {"SCALE": 0.36, "DIM": 0.10, "HOLD": 0.15, "LONG": 0.7, "RING_STEP": 0.5}
     try:
         for line in CONF.read_text().splitlines():
             key, _, val = line.partition("=")
@@ -181,6 +181,7 @@ class PrecisionTab(QWidget):
         self.ring_degrees.setSuffix("° of ring travel")
         self.ring_degrees.setKeyboardTracking(False)
         self.ring_degrees.setValue(max(1, round(degrees)))
+        self.ring_degrees.setToolTip("The ring reports 5° steps, so 5 is the finest tick; 1 to 5 behave the same.")
         self.ring_swap = QCheckBox("Swap the ring direction")
         ring_row = QHBoxLayout()
         ring_row.addWidget(QLabel("Ring: each tick changes the size by"))
@@ -193,14 +194,9 @@ class PrecisionTab(QWidget):
         tick_row.addStretch()
         toggle = QPushButton("Toggle precision now")
         toggle.clicked.connect(lambda: subprocess.Popen([str(TOGGLE)]))
-        hint = QLabel("Wacom-style placement: the cursor stays put on toggle, "
-                      "the area keeps the tablet's own proportions (no stretch "
-                      "inside it) and never leaves the screen. Size and dim apply "
-                      "on the next toggle or ring tick, the two times within two "
-                      "seconds, the ring step at the next tick; the tick angle and "
-                      "the direction go into the ring binding at once. The ring "
-                      "reports 5° steps, so 5 is the finest tick.")
-        hint.setWordWrap(True)
+        toggle.setToolTip("The pad button bound to Meta+Shift+F12 does the same. Size and dim apply "
+                          "on the next toggle or ring tick, the times within two seconds, the ring "
+                          "step at the next tick.")
 
         for w in (self.size_label, self.size, self.dim_label, self.dim):
             layout.addWidget(w)
@@ -208,8 +204,7 @@ class PrecisionTab(QWidget):
         layout.addLayout(long_row)
         layout.addLayout(ring_row)
         layout.addLayout(tick_row)
-        for w in (toggle, hint):
-            layout.addWidget(w)
+        layout.addWidget(toggle)
         layout.addStretch()
         for slider in (self.size, self.dim):
             slider.valueChanged.connect(self.update_labels)
@@ -313,6 +308,8 @@ def main():
     tabs = QTabWidget()
     tabs.addTab(PrecisionTab(aspect, pad), "Precision")
     tabs.addTab(PadTab(pad), "Pad buttons")
+    if "pad" in sys.argv[1:]:                  # `wacom_center.py pad` opens on the Pad buttons tab (the README pictures)
+        tabs.setCurrentIndex(1)
     links = QHBoxLayout()
     for label, cmd in (("Pie editor (Kando)", ["kando", "--settings"]),
                        ("System tablet page", ["systemsettings", "kcm_tablet"])):
