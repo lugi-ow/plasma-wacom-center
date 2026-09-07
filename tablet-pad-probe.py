@@ -32,12 +32,14 @@ import select
 import sys
 import time
 
+# ── chunk: quiet-reports
 BT_PEN_REGION_END = 270       # Bluetooth report 0x80: pen frames live below this
 BT_QUIET_REPORTS = {0x81}     # Bluetooth touch report: skipped unless --all
 USB_QUIET_REPORTS = {0x10}    # USB pen report (continuous in proximity): skipped unless --all
 BUS = {"0003": "usb", "0005": "bt"}
 
 
+# ── chunk: wacom_nodes
 def wacom_nodes():
     """[(path, bus, name)] for every Wacom hidraw node (vendor 056A)."""
     found = []
@@ -59,10 +61,12 @@ def wacom_nodes():
     return found
 
 
+# ── chunk: fmt
 def fmt(value):
     return f"0x{value:02x} {value:08b}"
 
 
+# ── chunk: main
 def main():
     show_all = "--all" in sys.argv
     nodes = wacom_nodes()

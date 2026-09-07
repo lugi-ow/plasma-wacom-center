@@ -25,11 +25,13 @@ os.environ.setdefault("DISPLAY", ":0")
 debug = os.environ.get("DEBUG") == "1"
 
 
+# ── chunk: trace
 def trace(msg):
     if debug:
         print(f"# {msg}", file=sys.stderr)
 
 
+# ── chunk: screen_size
 def screen_size():
     x11 = C.CDLL("libX11.so.6")
     x11.XOpenDisplay.restype = C.c_void_p
@@ -41,6 +43,7 @@ def screen_size():
     return x11.XDisplayWidth(dpy, screen), x11.XDisplayHeight(dpy, screen), x11, dpy
 
 
+# ── chunk: evdev_pen_norm
 def evdev_pen_norm():
     """Normalized (0..1) pen position from the kernel, or None."""
     try:
@@ -88,16 +91,19 @@ def evdev_pen_norm():
         os.close(fd)
 
 
+# ── chunk: XIAnyClassInfo
 class XIAnyClassInfo(C.Structure):
     _fields_ = [("type", C.c_int), ("sourceid", C.c_int)]
 
 
+# ── chunk: XIValuatorClassInfo
 class XIValuatorClassInfo(C.Structure):
     _fields_ = [("type", C.c_int), ("sourceid", C.c_int), ("number", C.c_int),
                 ("label", C.c_ulong), ("min", C.c_double), ("max", C.c_double),
                 ("value", C.c_double), ("resolution", C.c_int), ("mode", C.c_int)]
 
 
+# ── chunk: XIDeviceInfo
 class XIDeviceInfo(C.Structure):
     _fields_ = [("deviceid", C.c_int), ("name", C.c_char_p), ("use", C.c_int),
                 ("attachment", C.c_int), ("enabled", C.c_int),
@@ -105,6 +111,7 @@ class XIDeviceInfo(C.Structure):
                 ("classes", C.POINTER(C.POINTER(XIAnyClassInfo)))]
 
 
+# ── chunk: xwayland_stylus_norm
 def xwayland_stylus_norm(dpy):
     """Normalized (0..1) stylus position from XWayland, or None (may be stale)."""
     xi = C.CDLL("libXi.so.6")
@@ -137,6 +144,7 @@ def xwayland_stylus_norm(dpy):
     return pos
 
 
+# ── chunk: main-flow
 scr = screen_size()
 if not scr:
     sys.exit(1)

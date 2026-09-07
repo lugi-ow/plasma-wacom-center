@@ -16,18 +16,20 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QLocale, Qt
 from PyQt6.QtGui import QGuiApplication, QIcon, QKeySequence
-from PyQt6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel,
-                             QLineEdit, QMessageBox, QPushButton, QSlider,
+from PyQt6.QtWidgets import (QApplication, QDoubleSpinBox, QGridLayout, QHBoxLayout,
+                             QLabel, QLineEdit, QMessageBox, QPushButton, QSlider,
                              QTabWidget, QVBoxLayout, QWidget)
 
+# ── chunk: paths
 CONF = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tabprec.conf"
 TOGGLE = Path.home() / ".local/bin/tablet-precision.sh"
 MODIFIER_ONLY = {"Shift", "Control", "Ctrl", "Alt", "Meta"}
 KW, MGR, IF = "org.kde.KWin", "/org/kde/KWin/InputDevice", "org.kde.KWin.InputDevice"
 
 
+# ── chunk: busget
 def busget(path, prop):
     try:
         return subprocess.run(
@@ -38,6 +40,7 @@ def busget(path, prop):
         return ""
 
 
+# ── chunk: detect_devices
 def detect_devices():
     """Return (pad_device_name, tablet_aspect)."""
     pad_name, aspect = None, 1.6
@@ -54,8 +57,9 @@ def detect_devices():
     return pad_name, aspect
 
 
+# ── chunk: read_conf
 def read_conf():
-    values = {"SCALE": 0.7071, "DIM": 0.35}
+    values = {"SCALE": 0.7071, "DIM": 0.35, "HOLD": 0.6}
     try:
         for line in CONF.read_text().splitlines():
             key, _, val = line.partition("=")
@@ -66,17 +70,20 @@ def read_conf():
     return values
 
 
-def write_conf(scale, dim):
-    """Update SCALE and DIM in place; every other line (touch-preview keys,
-    comments) stays."""
+# ── chunk: write_conf
+def write_conf(scale, dim, hold):
+    """Update SCALE, DIM and HOLD in place; every other line (touch-preview
+    keys, comments) stays."""
     try:
         rest = [l for l in CONF.read_text().splitlines()
-                if l.split("=", 1)[0].strip() not in ("SCALE", "DIM")]
+                if l.split("=", 1)[0].strip() not in ("SCALE", "DIM", "HOLD")]
     except OSError:
         rest = []
-    CONF.write_text("\n".join([f"SCALE={scale:.4f}", f"DIM={dim:.2f}"] + rest) + "\n")
+    CONF.write_text("\n".join([f"SCALE={scale:.4f}", f"DIM={dim:.2f}", f"HOLD={hold:.1f}"]
+                              + rest) + "\n")
 
 
+# ── chunk: kread
 def kread(pad, idx):
     out = subprocess.run(
         ["kreadconfig6", "--file", "kcminputrc", "--group", "ButtonRebinds",
@@ -85,6 +92,7 @@ def kread(pad, idx):
     return out.removeprefix("Key,") if out.startswith("Key,") else ""
 
 
+# ── chunk: kwrite
 def kwrite(pad, idx, seq):
     subprocess.run(
         ["kwriteconfig6", "--notify", "--file", "kcminputrc", "--group",
@@ -93,6 +101,7 @@ def kwrite(pad, idx, seq):
         check=True)
 
 
+# ── chunk: PrecisionTab
 class PrecisionTab(QWidget):
     def __init__(self, aspect):
         super().__init__()
@@ -110,20 +119,37 @@ class PrecisionTab(QWidget):
         self.dim = QSlider(Qt.Orientation.Horizontal)
         self.dim.setRange(0, 80)
         self.dim.setValue(round(conf["DIM"] * 100))
+        hold_row = QHBoxLayout()
+        hold_row.addWidget(QLabel("Hold the precision key this long to start dragging the area:"))
+        self.hold = QDoubleSpinBox()
+        self.hold.setRange(0.3, 3.0)
+        self.hold.setSingleStep(0.1)
+        self.hold.setDecimals(1)
+        self.hold.setSuffix(" s")
+        self.hold.setLocale(QLocale.c())          # dot decimal like the conf file, whatever the desktop locale
+        self.hold.setKeyboardTracking(False)      # save on Enter, focus-out or a step, not per keystroke
+        self.hold.setValue(conf["HOLD"])
+        hold_row.addWidget(self.hold)
+        hold_row.addStretch()
         toggle = QPushButton("Toggle precision now")
         toggle.clicked.connect(lambda: subprocess.Popen([str(TOGGLE)]))
         hint = QLabel("Wacom-style placement: the cursor stays put on toggle, "
                       "the area keeps the tablet's own proportions (no stretch "
-                      "inside it) and never leaves the screen. Changes apply on "
-                      "the next toggle or ring tick.")
+                      "inside it) and never leaves the screen. Size and dim apply "
+                      "on the next toggle or ring tick, the hold time within two "
+                      "seconds.")
         hint.setWordWrap(True)
 
-        for w in (self.size_label, self.size, self.dim_label, self.dim, toggle, hint):
+        for w in (self.size_label, self.size, self.dim_label, self.dim):
+            layout.addWidget(w)
+        layout.addLayout(hold_row)
+        for w in (toggle, hint):
             layout.addWidget(w)
         layout.addStretch()
         for slider in (self.size, self.dim):
             slider.valueChanged.connect(self.update_labels)
             slider.sliderReleased.connect(self.save)
+        self.hold.valueChanged.connect(self.save)
         self.update_labels()
 
     def update_labels(self):
@@ -140,9 +166,10 @@ class PrecisionTab(QWidget):
         self.dim_label.setText(f"Dim strength outside the area: {self.dim.value()}%")
 
     def save(self):
-        write_conf(self.size.value() / 100, self.dim.value() / 100)
+        write_conf(self.size.value() / 100, self.dim.value() / 100, self.hold.value())
 
 
+# ── chunk: PadTab
 class PadTab(QWidget):
     def __init__(self, pad):
         super().__init__()
@@ -187,6 +214,7 @@ class PadTab(QWidget):
             QMessageBox.warning(self, "Wacom Center", "\n".join(problems))
 
 
+# ── chunk: main
 def main():
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon.fromTheme("input-tablet"))

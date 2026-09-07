@@ -12,6 +12,7 @@
 #
 # install.sh binds Meta+Shift+F11 -> net.local.tabpie.desktop -> this file;
 # put that chord on a pad button (F-keys + modifiers only, see the README).
+# ── chunk: warp-then-open
 DIR=$(cd "$(dirname "$0")" && pwd)
 MENU=${1:-Krita}
 if POS=$(python3 "$DIR/tablet-pen-pos.py" 2>/dev/null); then

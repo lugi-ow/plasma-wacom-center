@@ -24,17 +24,24 @@ devices are found by capability, not by model name.
   aspect ratio (read from the hardware), so your input is not distorted.
 - **Dim overlay.** Everything outside the mapped area dims; the work area
   stays clear with a thin border. Click-through, on the compositor overlay
-  layer. Can be adjusted in settings.
+  layer. Can be adjusted in settings. Every preview the toolkit shows (the
+  ring preview, the touch-preview ghost, the area while it is dragged) is
+  the same picture with the border dashed and flowing clockwise: a
+  rectangle waiting to be activated.
 - **Ring size control.** The tablet's touch ring resizes the area in 2%
-  steps (5-80% of screen width), with a centred fading preview showing the
-  prospective size. Works live while precision mode is on.
-- **Wacom Center**, a PyQt window: size and dim sliders, express-key chord
+  steps (5-80% of screen width). With precision mode off, a centred fading
+  preview shows the prospective size; with it on, the area itself grows or
+  shrinks around its centre and stays where it is. Ticks while the area is
+  being dragged are ignored.
+- **Wacom Center**, a PyQt window: size and dim sliders, the hold time, express-key chord
   editor, buttons to the pie-menu editor and the system tablet page.
 - **Pie menu under the pen.** `tablet-pie.sh` moves the mouse onto the pen
   and then opens a [Kando](https://kando.menu) menu, so the pie appears where
   you draw, not where the mouse was left.
 - **ExpressKey touch preview** (experimental). While a finger rests on the
-  precision key, a ghost shows where the area would go. See below.
+  precision key, a ghost - precision mode's own picture with the flowing
+  border - shows where the area would go; with precision mode on, holding
+  the key drags the area to a new place. See below.
 
 <p align="center"><img src="docs/placement.svg" width="880" alt="The placement rule in three cases: pen at the centre, off-centre, and in a corner"></p>
 
@@ -51,10 +58,12 @@ Precision mode on, with the reference in Gwenview and the drawing in Krita.
 The pen now maps to the rectangle with the amber border; the rest of the
 screen is dimmed (10% here). The cursor did not move when the mode came on.
 
-<p align="center"><img src="docs/ring-size-preview.png" width="720" alt="Ring size preview: a centred amber rectangle with the size in percent"></p>
+<p align="center"><img src="docs/ring-size-preview.png" width="720" alt="Ring size preview: the dim overlay with a centred clear rectangle and a dashed amber border"></p>
 
-A tick of the touch ring. The preview shows the size the area will have,
-then fades out.
+A tick of the touch ring with precision mode off. The preview is the mode's
+own picture, centred, with the dashed border every preview wears; it fades
+out by itself. With the mode on, the area itself resizes around its centre
+and nothing else shows.
 
 <p align="center"><img src="docs/screenshot-wacom-center-precision.png" width="400" alt="Wacom Center, Precision tab"> <img src="docs/screenshot-wacom-center-pad.png" width="400" alt="Wacom Center, Pad buttons tab"></p>
 
@@ -72,7 +81,8 @@ PyQt6:
 - Plasma 6.5 or newer on Wayland (6.6 tested). X11 sessions: use `xsetwacom`
   instead, this project is Wayland-only.
 - `python3-pyqt6` and `python3-pyqt6.qtquick` (overlay and settings window)
-- `qml6-module-org-kde-layershell` (usually present on Plasma)
+- `qml6-module-org-kde-layershell` and `qml6-module-qtquick-shapes` (both
+  dependencies of the Plasma desktop, so present)
 
 ```
 sudo apt install python3-pyqt6 python3-pyqt6.qtquick
@@ -141,7 +151,9 @@ The Intuos Pro's express keys sense a finger that rests on them before the
 press. `tablet-hover.py` uses that to show a ghost of the area precision
 mode would map right now - same placement math, nothing changed - and
 moves it with the pen, and removes it when the finger lifts or the key is
-pressed. On a Wacom Intuos Pro (2017 or later) there is nothing to set
+pressed. The ghost is precision mode's own picture, the same dim and the
+same border, with the border dashed and flowing clockwise: the sign of a
+preview waiting to be activated. On a Wacom Intuos Pro (2017 or later) there is nothing to set
 up beyond the udev rule from the install step: the report layouts are
 built into `tablet-hover.py`, and the daemon learns which key is the
 precision key the first time a single key press is followed by
@@ -156,6 +168,30 @@ buses use different layouts. Reference, Intuos Pro M, one bit per key,
 key N = bit N-1 (key 8 = `0x80`): over USB report `0x11`, byte 2 =
 touch bits, byte 1 = press bits; over Bluetooth report `0x80`, byte 283 =
 touch bits, byte 282 = press bits.
+
+With precision mode already on, the same key relocates the area. Rest a
+finger on it (the hold time field in Wacom Center, `HOLD` in
+`~/.config/tabprec.conf`, default 0.6 s, picked up without a restart): the
+pen gets the whole screen back for the moment, the cursor roams, and the
+real overlay travels around it with the same placement rule, wearing the
+flowing border until the press. Press the key to map the area there,
+around the cursor. Lift the finger without a press and both the overlay
+and the mapping return to the old area. A quick press still switches the
+mode off; ring ticks during the drag are ignored. Under the hood the
+overlay is moved through a named pipe (`tablet-overlay.py --fifo`, the
+lines `waiting` and `solid` switch its border), the ring resize uses the
+same pipe instead of respawning the overlay, the toggle script's `suspend`
+and `resume` modes bracket the drag, and a marker file that the daemon
+keeps fresh tells the toggle that the press is a move.
+
+## For contributors and AI agents
+
+`PROJECT_MAP.md` says what each file is for, how the processes talk to each
+other (the runtime files, the conf keys, the overlay's pipe) and lists every
+chunk marker (`# ── chunk: <name>`), so you can grep instead of read.
+`tests/run_all.sh` runs every gate in about 25 s without a tablet: compile,
+shell syntax, the map check, and two rigs that drive the toggle script and the
+hover daemon with fakes.
 
 ## License
 

@@ -15,7 +15,8 @@ install -m 755 tablet-precision.sh tablet-precision-size.sh \
     tablet-pen-pos.py tablet-overlay.py tablet-size-preview.py \
     tablet-pointer-warp.py tablet-pie.sh tablet-hover.py tablet-pad-probe.py \
     wacom_center.py "$BIN/"
-install -m 644 tablet-overlay.qml tablet-size-preview.qml "$BIN/"
+install -m 644 tablet-overlay.qml "$BIN/"
+rm -f "$BIN/tablet-size-preview.qml"    # retired: the size preview draws with tablet-overlay.qml
 
 echo "== 2/5 Shortcut launcher entries (command-shortcut marker included)"
 mkentry() {  # name, exec-args, description

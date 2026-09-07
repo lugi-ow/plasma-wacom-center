@@ -71,6 +71,38 @@ the raw reports from `/dev/hidraw*` next to the kernel driver
 (`org.kde.layershell` QML module) covers the screen, stays click-through,
 and survives everything except its own process exit.
 
+**Moving a running overlay from other processes**: give it a named pipe
+and open the pipe `O_RDWR | O_NONBLOCK` on the reading side. A read-only
+open hits EOF, and a spinning read notifier, as soon as the last writer
+closes; with the reader also holding a write end, writers come and go
+(`echo "X Y W H" > pipe` from the shell, `os.write` from the daemon), and
+lines under `PIPE_BUF` stay whole. Wrap the shell write in `timeout` for
+the case of a reader that died.
+
+**Two processes see one button press, at different times.** The pad's raw
+hidraw report reaches the hover daemon milliseconds before KWin's shortcut
+even starts the toggle script, so the daemon must not delete its "this
+press is a move" marker on the press. It stops refreshing the marker
+instead, and the script accepts only a marker younger than 3 s. A stale
+marker is then harmless by construction.
+
 **One-shot KWin scripts** are the escape hatch for anything only the
 compositor knows: load JS via `org.kde.kwin.Scripting`, `print()` the
 answer, read it back from `journalctl --user -u plasma-kwin_wayland`.
+
+**A dashed border that flows** is a `QtQuick.Shapes` path with
+`strokeStyle: ShapePath.DashLine` and an animated `dashOffset` (a
+`Rectangle` border cannot be dashed at all). Two facts the docs leave you
+to find: the dash pattern and the offset are in units of the pen WIDTH, not
+pixels (`[2.5, 2.5]` at width 2 is 5 px on, 5 px off), and a GROWING
+offset moves the dashes BACKWARD along the path - to flow clockwise around
+a rectangle drawn clockwise, animate the offset from one period down to 0.
+Use `capStyle: ShapePath.FlatCap`, or the default square caps stretch every
+dash by a pen width at each end. `qml6-module-qtquick-shapes` is a
+dependency of plasma-desktop, so it is on every Plasma 6 system.
+
+**Rendering a layer-shell QML file without a display** works for tests:
+`QT_QPA_PLATFORM=offscreen`, load it, `grabWindow()` on the root
+(LayerShellQt only warns "not a wayland window"). In PyQt6 the root comes
+back as a plain `QWindow` without `grabWindow` unless `PyQt6.QtQuick` is
+imported somewhere first.

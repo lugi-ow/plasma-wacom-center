@@ -3,7 +3,8 @@
 # Draws a stylized 1280x720 desktop (no real screenshot: nothing private, no
 # app branding) and overlays exactly what the scripts draw: the dim-around
 # overlay with its 2 px inset border (tablet-overlay.qml) and the centred ring
-# size preview (tablet-size-preview.qml). Also writes placement.svg, three
+# size preview (the same picture in its waiting style: the border dashed, 5 px
+# on, 5 px off). Also writes placement.svg, three
 # panels of the cursor-stationary placement rule. Offscreen Qt, no display.
 import os
 import sys
@@ -158,22 +159,25 @@ def precision_image():
 
 
 def preview_image():
+    """The ring size preview with precision mode off: the mode's own picture,
+    centred, with the dashed border of a preview (tablet-overlay.qml, waiting)."""
     img, p = new_image()
     _, _, w, h = area(SCALE, (0.5, 0.5))
-    x, y = (W - w) / 2, (H - h) / 2
-    p.setBrush(QColor(0xe6, 0xa8, 0x17, round(0.10 * 255)))
-    pen = QPen(AMBER, 3)
+    x, y = (W - w) // 2, (H - h) // 2
+    dim = QColor(0, 0, 0, round(0.35 * 255))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(dim)
+    p.drawRect(QRectF(0, 0, W, y))
+    p.drawRect(QRectF(0, y + h, W, H - y - h))
+    p.drawRect(QRectF(0, y, x, h))
+    p.drawRect(QRectF(x + w, y, W - x - w, h))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    pen = QPen(AMBER, 2)
+    pen.setDashPattern([2.5, 2.5])          # in pen widths, like ShapePath.dashPattern: 5 px on, 5 px off
+    pen.setCapStyle(Qt.PenCapStyle.FlatCap)
     pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
     p.setPen(pen)
-    p.drawRect(QRectF(x, y, w, h))
-    font = QFont("sans-serif", 48)
-    font.setBold(True)
-    path = QPainterPath()
-    path.addText(QPointF(0, 0), font, "29%")
-    b = path.boundingRect()
-    path.translate(W / 2 - b.center().x(), H / 2 - b.center().y())
-    p.strokePath(path, QPen(QColor(0, 0, 0), 6))
-    p.fillPath(path, QColor(255, 255, 255))
+    p.drawRect(QRectF(x + 1, y + 1, w - 2, h - 2))      # inset like the QML border
     pen_cursor(p, 0.66 * W, 0.42 * H)
     p.end()
     return img

@@ -31,24 +31,29 @@ import time
 debug = os.environ.get("DEBUG") == "1"
 
 
+# ── chunk: trace
 def trace(msg):
     if debug:
         print(f"# {msg}", file=sys.stderr)
 
 
+# ── chunk: _IO
 # ioctl numbers (asm-generic encoding: dir<<30 | size<<16 | type<<8 | nr)
 def _IO(nr):
     return (ord("U") << 8) | nr
 
 
+# ── chunk: _IOW
 def _IOW(nr, size):
     return (1 << 30) | (size << 16) | (ord("U") << 8) | nr
 
 
+# ── chunk: _IOR
 def _IOR(nr, size):
     return (2 << 30) | (size << 16) | (ord("U") << 8) | nr
 
 
+# ── chunk: uinput-constants
 UI_DEV_CREATE, UI_DEV_DESTROY = _IO(1), _IO(2)
 UI_DEV_SETUP = _IOW(3, 92)      # struct uinput_setup: input_id(8) + name[80] + u32
 UI_ABS_SETUP = _IOW(4, 28)      # struct uinput_abs_setup: u16 code, pad, input_absinfo(24)
@@ -59,6 +64,7 @@ ABS_X, ABS_Y, BTN_LEFT, BUS_VIRTUAL = 0, 1, 0x110, 6
 ABS_RANGE = 65536               # libinput: px = value * screen / (max - min + 1)
 
 
+# ── chunk: screen_size
 def screen_size():
     x11 = C.CDLL("libX11.so.6")
     x11.XOpenDisplay.restype = C.c_void_p
@@ -77,6 +83,7 @@ def screen_size():
     return size
 
 
+# ── chunk: kwin_sees
 def kwin_sees(event_node, timeout=1.5):
     """Poll KWin's input device list until event_node shows up."""
     deadline = time.monotonic() + timeout
@@ -91,10 +98,12 @@ def kwin_sees(event_node, timeout=1.5):
     return False
 
 
+# ── chunk: emit
 def emit(fd, etype, code, value):
     os.write(fd, struct.pack("<qqHHi", 0, 0, etype, code, value))
 
 
+# ── chunk: main
 def main():
     if len(sys.argv) not in (3, 5):
         sys.exit("usage: tablet-pointer-warp.py X Y [SW SH]")

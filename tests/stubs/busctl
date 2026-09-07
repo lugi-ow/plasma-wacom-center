@@ -1,0 +1,15 @@
+#!/bin/bash
+# Stub busctl for tablet-precision.sh tests: answers the four get-property
+# calls with an Intuos Pro M shape and logs every call to $STUB_LOG.
+echo "busctl $*" >> "${STUB_LOG:-/dev/stderr}"
+if [ "$2" = "get-property" ]; then
+    case "${@: -1}" in
+        devicesSysNames) echo 'as 1 "event5"' ;;
+        name)            echo 's "Wacom Intuos Pro M Pen"' ;;
+        tabletTool)      echo 'b true' ;;
+        tabletPad)       echo 'b false' ;;
+        size)            echo '(dd) 224 148' ;;
+        outputArea)      echo '(dddd) 0 0 1 1' ;;
+    esac
+fi
+exit 0
