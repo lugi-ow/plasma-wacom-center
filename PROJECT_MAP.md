@@ -39,6 +39,7 @@ Runtime files live in `$XDG_RUNTIME_DIR/tabprec/` (`$RD` below). The conf is
 | `$RD/overlay.fifo` | created by the overlay (`--fifo`, held O_RDWR); written by `apply_area` and the daemon | the overlay | lines `X Y W H [DIM]` (move), `waiting` / `solid` (the border); applied in order, under PIPE_BUF |
 | `$RD/relocate` | the daemon: touched at the hold, then at 30 Hz while dragging; removed on a cancel | the toggle: younger than 3 s = MOVE instead of OFF; the ring script: younger than 3 s = the tick does nothing | its mtime is the message; never deleted on a press |
 | `$RD/lock` | every run of the toggle script (`flock`) | — | one run at a time; the spawned overlay closes the descriptor (`9>&-`) |
+| `$RD/pen` | the toggle, after a walk over KWin's device list | the toggle (every run that needs the pen) | the pen's KWin sysname; one `name` call confirms it, a stale one triggers a new walk |
 | `$RD/preview.pid`, `overlay.log`, `preview.log`, `probe.js` | the ring script / the toggle | the ring script / nobody | housekeeping |
 | conf `SCALE` | Wacom Center, the ring script | the toggle (every run), the size preview | 0.05–0.80 of the screen width |
 | conf `DIM` | Wacom Center | the toggle, the size preview | 0–0.8 |
@@ -79,17 +80,18 @@ row whatever their timing.
 
 ### `tablet-precision.sh` — the toggle, and the only writer of the pen mapping
 Modes `toggle` (default), `resize`, `where`, `suspend`, `resume`. Finds the pen
-through KWin's device list on every run, reads the pen position from
-`tablet-pen-pos.py` (the mouse as fallback, through a one-shot KWin script),
-computes the area, sets `outputArea`, then moves or spawns the overlay.
-- **chunk: `config-and-paths`** — conf sourcing with defaults, the D-Bus names, the runtime dir and its file names, the run lock (`flock`, 5 s wait).
+in KWin's device list (cached sysname, one call to confirm), reads the pen
+position from `tablet-pen-pos.py` (the mouse as fallback, through a one-shot
+KWin script), computes the area, sets `outputArea`, then moves or spawns the
+overlay. One run at a time; a run reads the conf after taking the lock.
+- **chunk: `config-and-paths`** — the D-Bus names, the runtime dir and its file names, the run lock (`flock`, 5 s wait), then the conf with defaults.
 - **chunk: `note`** — notify-send wrapper; only errors notify.
 - **chunk: `kload`** / **`kunload`** — load and unload the one-shot KWin script of the mouse fallback.
-- **chunk: `pen-lookup`** — the pen's KWin device sysname; notifies and exits when there is none.
+- **chunk: `find_pen`** — the pen's KWin sysname: the cached one (`$RD/pen`, one call confirms it) or a walk over every device; notifies and exits when there is none.
 - **chunk: `area_math`** — W H from SCALE and the tablet aspect, then X Y and the fractions: `pen` = the cursor-stationary placement, `centre` = centred and clamped to the screen.
 - **chunk: `compute_area`** — pen position (evdev, XWayland, then the mouse), then `area_math pen`; used by ON, a move and `where`.
 - **chunk: `apply_area`** — sets the mapping computed before it, writes the area file, moves the live overlay through its pipe or (re)spawns it.
-- **chunk: `resize`** — while ON: `area_math centre` on the centre of the area on record, then `apply_area` (the ring script calls it); the pen only without a record.
+- **chunk: `resize`** — while ON: `area_math centre` on the recorded centre, then `apply_area` (the ring calls it); nothing when the width is already on screen; the pen only without a record.
 - **chunk: `where`** — prints the area a toggle ON would map now, nothing changed (the ghost).
 - **chunk: `suspend`** / **`resume`** — while ON: the base mapping back / the recorded area again (the daemon brackets a drag with them); `resume` computes the fractions of a 7-field area file.
 - **chunk: `toggle`** — OFF→ON saves the base mapping; ON with a fresh marker = move; ON otherwise = restore, clean up, kill the overlay.

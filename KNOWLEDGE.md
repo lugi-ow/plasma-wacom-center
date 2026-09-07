@@ -115,6 +115,17 @@ by the other. `flock` on a runtime file at the top of the script
 the script spawns with `nohup … &` inherits descriptor 9 and would hold
 the lock for as long as it lives. Close it on the spawn (`9>&-`).
 
+**A shortcut-driven ring tick is a process, and processes queue.** KWin
+fires the chord on every 5-degree step, the shortcut daemon launches the
+script for each one, and a quick swipe puts a dozen in flight while each
+needs about 100 ms of D-Bus work; serialized by a lock they run one after
+another and the area keeps stepping after the finger has stopped. Two
+rules make the queue collapse: read the setting AFTER taking the lock, so
+a queued run applies the newest value, and do nothing when what is on
+screen already matches, so the rest of the queue drains in milliseconds.
+Cache the device lookup as well: asking KWin for the name of each of a
+dozen devices costs more than the resize itself.
+
 **Rendering a layer-shell QML file without a display** works for tests:
 `QT_QPA_PLATFORM=offscreen`, load it, `grabWindow()` on the root
 (LayerShellQt only warns "not a wayland window"). In PyQt6 the root comes

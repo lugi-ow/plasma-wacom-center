@@ -18,7 +18,7 @@ FILES = ("tablet-precision.sh", "tablet-pen-pos.py", "tablet-overlay.py", "table
          "tablet-pie.sh", "tablet-pointer-warp.py", "tablet-pad-probe.py", "wacom_center.py")
 # file -> [(line prefix that anchors the block, chunk name)]
 BLOCKS = {
-    "tablet-precision.sh": [("export LC_ALL=C.UTF-8", "config-and-paths"), ('pen=""', "pen-lookup")],
+    "tablet-precision.sh": [("export LC_ALL=C.UTF-8", "config-and-paths")],
     "tablet-pen-pos.py": [("scr = screen_size()", "main-flow")],
     "tablet-overlay.py": [("USAGE = ", "args"), ("app = QGuiApplication", "window"),
                           ("if follow or fifo:", "input-source"), ("    def on_input", "on_input")],

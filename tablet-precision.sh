@@ -36,6 +36,11 @@
 # the geometry of the current mapping is kept in $RD/area for the daemon.
 # Runs are serialized with flock on $RD/lock: two runs never interleave (a
 # long press on the pad key = KWin's MOVE toggle, then the daemon's OFF).
+# The conf is read after the lock and a resize that finds its width already
+# on screen does nothing, so a burst of ring ticks (one process each, every
+# 5 degrees) collapses into two resizes instead of a staircase; the pen's
+# sysname is cached in $RD/pen (one D-Bus call to confirm it per run, not
+# one per device).
 #
 # Config: ~/.config/tabprec.conf - SCALE (0.05-0.80 of screen width), DIM
 # (0-0.8). Wacom Center and tablet-precision-size.sh write it. Silent by
@@ -55,9 +60,6 @@
 # ── chunk: config-and-paths
 export LC_ALL=C.UTF-8    # decimal point regardless of locale; UTF-8 keeps Qt quiet
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/tabprec.conf"
-[ -f "$CONF" ] && . "$CONF"
-SCALE=${SCALE:-0.7071}
-DIM=${DIM:-0.35}
 MODE=${1:-toggle}
 KW=org.kde.KWin
 MGR=/org/kde/KWin/InputDevice
@@ -66,11 +68,16 @@ SCR=org.kde.kwin.Scripting
 RD="${XDG_RUNTIME_DIR:-/tmp}/tabprec"
 mkdir -p "$RD"
 exec 9>"$RD/lock"; flock -w 5 9 || exit 1   # one run at a time: a long press makes KWin's MOVE toggle and the daemon's OFF toggle land in a row
+[ -f "$CONF" ] && . "$CONF"   # read AFTER the lock: a ring tick queued behind another applies the newest SCALE, not the one it was born with
+SCALE=${SCALE:-0.7071}
+DIM=${DIM:-0.35}
 DIR=$(cd "$(dirname "$0")" && pwd)
 STATE="$RD/saved-area"
 FIFO="$RD/overlay.fifo"    # the live overlay reads "X Y W H DIM" lines from it
 AREA="$RD/area"            # "X Y W H DIM SW SH FX FY FW FH" of the current mapping (tablet-hover.py relocates from it)
 MARK="$RD/relocate"        # fresh while tablet-hover.py drags the overlay: the next press moves instead of switching off
+PEN_CACHE="$RD/pen"        # the pen's KWin sysname from the last walk over the device list: one D-Bus call confirms it
+pen=""
 
 # ── chunk: note
 note() { notify-send -a Tablet -i input-tablet -t 1800 "Precision mode" "$1" 2>/dev/null; }
@@ -81,20 +88,29 @@ kload() { qdbus6 $KW /Scripting $SCR.unloadScript "$2" >/dev/null 2>&1
 # ── chunk: kunload
 kunload() { qdbus6 $KW /Scripting $SCR.unloadScript "$1" >/dev/null 2>&1; }
 
-# ── chunk: pen-lookup
-pen=""
-for n in $(busctl --user get-property $KW $MGR $KW.InputDeviceManager devicesSysNames 2>/dev/null \
-           | tr -d '"' | cut -d' ' -f3-); do
-    tool=$(busctl --user get-property $KW $MGR/$n $IF tabletTool 2>/dev/null)
-    case "$tool" in *true*) pen=$n; break;; esac
-done
-if [ -z "$pen" ]; then
-    note "No tablet pen found (tablet asleep?)"
-    exit 1
-fi
+# ── chunk: find_pen
+find_pen() {  # the pen's KWin sysname into $pen: the cached one when KWin still calls it a tablet tool (one D-Bus call), else a walk over every device; exits 1 when there is none
+    [ -n "$pen" ] && return 0
+    pen=$(cat "$PEN_CACHE" 2>/dev/null)
+    if [ -n "$pen" ]; then
+        case "$(busctl --user get-property $KW $MGR/$pen $IF tabletTool 2>/dev/null)" in *true*) return 0;; esac
+        pen=""
+    fi
+    for n in $(busctl --user get-property $KW $MGR $KW.InputDeviceManager devicesSysNames 2>/dev/null \
+               | tr -d '"' | cut -d' ' -f3-); do
+        tool=$(busctl --user get-property $KW $MGR/$n $IF tabletTool 2>/dev/null)
+        case "$tool" in *true*) pen=$n; break;; esac
+    done
+    if [ -z "$pen" ]; then
+        note "No tablet pen found (tablet asleep?)"
+        exit 1
+    fi
+    echo "$pen" > "$PEN_CACHE"
+}
 
 # ── chunk: area_math
 area_math() {  # W H X Y (px) and FX FY FW FH (fractions) for SCALE and the tablet's aspect. $1 = "pen": placed around the pen at $2 $3 so the cursor stays put; "centre": centred on $2 $3, clamped to the screen. $4 $5 = the screen size.
+    find_pen
     CX=$2 CY=$3 SW=$4 SH=$5
     TABSIZE=$(busctl --user get-property $KW $MGR/$pen $IF size 2>/dev/null | cut -d' ' -f2-)
     read -r W H X Y FX FY FW FH <<EOF
@@ -149,14 +165,18 @@ apply_area() {  # map the computed area (W H X Y FX FY FW FH SW SH), record it, 
     echo $! > "$RD/overlay.pid"
 }
 
+[ "$MODE" = resize ] || find_pen      # resize looks the pen up only when it has something to apply
 case "$MODE" in
 # ── chunk: resize
-resize)    # while ON: the conf's SCALE around the area's own centre (the pen's position only when there is no area on record)
+resize)    # while ON: the conf's SCALE around the area's own centre (the pen's position only when there is no area on record); a queued tick whose width is already on screen does nothing
     if [ -f "$STATE" ]; then
         set -- $(cat "$AREA" 2>/dev/null)
         if [ -n "${7:-}" ]; then
-            CENTRE=$(awk -v x="$1" -v y="$2" -v w="$3" -v h="$4" 'BEGIN{printf "%.1f %.1f", x + w / 2, y + h / 2}')
-            area_math centre $CENTRE "$6" "$7" && apply_area
+            TARGET_W=$(awk -v s="$SCALE" -v sw="$6" 'BEGIN{ if (s > 0.8) s = 0.8; if (s < 0.05) s = 0.05; printf "%d", int(sw * s + 0.5) }')
+            if [ "$TARGET_W" != "$3" ]; then
+                CENTRE=$(awk -v x="$1" -v y="$2" -v w="$3" -v h="$4" 'BEGIN{printf "%.1f %.1f", x + w / 2, y + h / 2}')
+                area_math centre $CENTRE "$6" "$7" && apply_area
+            fi
         else
             compute_area && apply_area
         fi

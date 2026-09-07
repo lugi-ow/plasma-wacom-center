@@ -29,6 +29,7 @@ check "1 mapping set once"              '[ "$(sets)" -eq 1 ]'
 check "1 outputArea fractions"          'grep -q "set-property.*outputArea (dddd) 0.355078 0.329861 0.289844 0.340278" "$STUB_LOG"'
 check "1 overlay spawned with --fifo"   'grep -q "^SPAWN 909 475 742 490 0.10 --fifo $RD/overlay.fifo$" "$FAKE_LOG"'
 check "1 fifo exists"                   '[ -p "$RD/overlay.fifo" ]'
+check "1 pen sysname cached"            '[ "$(cat "$RD/pen")" = "event5" ]'
 PID1=$(cat "$RD/overlay.pid")
 
 # 2: fresh relocate marker + press -> MOVE (pen at 200 300 -> 142 198), still ON, overlay moved through the pipe.
@@ -50,6 +51,10 @@ check "3 area file = 1 105 1024 677 …"  '[ "$(cat "$RD/area")" = "1 105 1024 6
 check "3 resize did not respawn"        '[ "$(cat "$RD/overlay.pid")" = "$PID1" ] && [ "$(grep -c SPAWN "$FAKE_LOG")" -eq 1 ]'
 check "3 mapping set (3 calls)"         '[ "$(sets)" -eq 3 ]'
 check "3 resize ignores the pen: no line near 2000 1000" '! grep -q "^1[0-9][0-9][0-9] [0-9]* 1024 677" "$FAKE_LOG"'
+
+# 3a: the same SCALE again (a ring tick queued behind the one that did the work): nothing happens.
+"$T" resize; sleep 0.3
+check "3a resize with the width already on screen: no mapping call, no pipe line" '[ "$(sets)" -eq 3 ] && [ "$(wc -l < "$FAKE_LOG")" -eq 3 ]'
 
 # 3b: suspend -> the saved base mapping while still ON; resume -> the area's fractions again; overlay untouched.
 "$T" suspend; sleep 0.3
