@@ -28,20 +28,26 @@ devices are found by capability, not by model name.
   ring preview, the touch-preview ghost, the area while it is dragged) is
   the same picture with the border dashed and flowing clockwise: a
   rectangle waiting to be activated.
-- **Ring size control.** The tablet's touch ring resizes the area in 2%
-  steps (5-80% of screen width). With precision mode off, a centred fading
-  preview shows the prospective size; with it on, the area itself grows or
-  shrinks around its centre and stays where it is. Ticks while the area is
-  being dragged are ignored.
-- **Wacom Center**, a PyQt window: size and dim sliders, the hold time, express-key chord
+- **Ring size control.** The tablet's touch ring resizes the area between
+  5 and 80% of the screen width. Each tick adds or removes a number of
+  percentage points (2 by default) and a tick fires every so many degrees
+  of ring travel (5 by default, the ring's own step); both are Wacom Center
+  settings, with a switch for the direction. With precision mode off, a
+  centred fading preview shows the prospective size; with it on, the area
+  itself grows or shrinks around its centre and stays where it is. Ticks
+  while the area is being dragged are ignored.
+- **Wacom Center**, a PyQt window: size and dim sliders, the hold and
+  long-press times, the ring step and tick angle, the express-key chord
   editor, buttons to the pie-menu editor and the system tablet page.
 - **Pie menu under the pen.** `tablet-pie.sh` moves the mouse onto the pen
   and then opens a [Kando](https://kando.menu) menu, so the pie appears where
   you draw, not where the mouse was left.
-- **ExpressKey touch preview** (experimental). While a finger rests on the
-  precision key, a ghost - precision mode's own picture with the flowing
-  border - shows where the area would go; with precision mode on, holding
-  the key drags the area to a new place. See below.
+- **ExpressKey touch preview and area drag** (experimental). While a finger
+  rests on the precision key, a ghost - precision mode's own picture with the
+  flowing border - shows where the area would go. With precision mode on,
+  resting the finger drags the area to a new place and a press lands it;
+  keeping the key pressed leaves the mode. Both times are settings, down to
+  0 s. See below.
 
 <p align="center"><img src="docs/placement.svg" width="880" alt="The placement rule in three cases: pen at the centre, off-centre, and in a corner"></p>
 
@@ -145,7 +151,7 @@ it runs `kando --menu` as before, at the mouse. The menu name is the first
 argument. It needs write access to `/dev/uinput`. Kubuntu grants it to the
 logged-in user. Elsewhere add a udev rule: `KERNEL=="uinput", TAG+="uaccess"`.
 
-## ExpressKey touch preview (experimental)
+## ExpressKey touch preview and area drag (experimental)
 
 The Intuos Pro's express keys sense a finger that rests on them before the
 press. `tablet-hover.py` uses that to show a ghost of the area precision
@@ -185,6 +191,21 @@ press: keep the key pressed for the long-press time (the second field,
 `LONG`, default 1 s, 0 disables it) after such a move and precision mode
 switches off. The area lands at the press first, because the compositor
 fires the toggle on the key-down; the mode leaves when the time is up.
+
+What the precision key does, in one table (`HOLD` and `LONG` are the two
+time fields in Wacom Center):
+
+| Precision mode | On the precision key | Result |
+|---|---|---|
+| off | press | the mode comes on, the area around the cursor |
+| off | rest a finger | the ghost shows where the area would go, following the pen |
+| on | press before `HOLD` has passed | the mode goes off |
+| on | rest for `HOLD`, then press | the area moves to the pen |
+| on | rest for `HOLD`, lift without pressing | nothing changes |
+| on | rest for `HOLD`, press and keep the key down for `LONG` | the area moves, then the mode goes off |
+
+With `HOLD` at 0 the third row disappears: every press is a move, and the
+last row is the way out.
 
 Under the hood the overlay is moved through a named pipe
 (`tablet-overlay.py --fifo`, the lines `waiting` and `solid` switch its

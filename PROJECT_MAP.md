@@ -16,7 +16,7 @@ markers do not. `tests/check_map.py` keeps this file and the markers in step;
 | `tablet-precision.sh` | the pad key's chord (a KWin global shortcut), the ring script, the hover daemon, Wacom Center | one run per call, ~150 ms | KWin D-Bus (`outputArea`), the runtime files, the overlay's pipe |
 | `tablet-overlay.py` + `.qml` | the toggle (the precision overlay, `--fifo`), the daemon (the ghost, `--waiting --follow`) | precision: ON to OFF; ghost: touch to lift | its pipe or its stdin |
 | `tablet-hover.py` | the autostart entry (install.sh) | always | every Wacom hidraw node, the pen's evdev node, the toggle (`where`, `suspend`, `resume`, `toggle` on a long press), the overlay pipe, the conf |
-| `tablet-precision-size.sh` | the ring's two chords | one run per tick | the conf (SCALE), the relocate marker, the toggle (`resize`, mode on) or the size preview (mode off) |
+| `tablet-precision-size.sh` | the ring's two chords | one run per tick | the conf (SCALE, RING_STEP), the relocate marker, the toggle (`resize`, mode on) or the size preview (mode off) |
 | `tablet-size-preview.py` (+ `tablet-overlay.qml`) | the ring script, mode off, when none is running | until 1.2 s after the last conf change, or at once when the mode comes on | the conf (mtime), the state file |
 | `tablet-pie.sh` → `tablet-pointer-warp.py` → `kando` | a pad key's chord | one run | `/dev/uinput`, KWin's device list |
 | `wacom_center.py` | the launcher entry | a window | the conf, `kcminputrc`, the toggle |
@@ -44,6 +44,8 @@ Runtime files live in `$XDG_RUNTIME_DIR/tabprec/` (`$RD` below). The conf is
 | conf `DIM` | Wacom Center | the toggle, the size preview | 0–0.8 |
 | conf `HOLD` | Wacom Center | the daemon (re-read within 2 s) | seconds a resting finger waits before a drag; no floor (0 = at once), default 0.6 |
 | conf `LONG` | Wacom Center | the daemon (re-read within 2 s) | seconds a press that confirmed a drag stays down to leave the mode; 0 = never, default 1.0 |
+| conf `RING_STEP` | Wacom Center | the ring script | percentage points of screen width per ring tick; default 2 |
+| `kcminputrc` `[ButtonRebinds][TabletRing][<pad>][0]` `0=AxisKey,<up>,<down>,<threshold>` | Wacom Center (tick angle, direction), install.sh (600) | KWin | threshold = degrees per tick × 120; the ring reports 5° steps, so ≤ 600 = every step (72 ticks a turn) |
 | conf `HOVER_MASK` | the daemon (learned) | the daemon | the precision key's bit |
 | conf `HOVER_REPORT`, `HOVER_BYTE`, `PRESS_BYTE`, `PRESS_MASK` (+ `_USB` / `_BT`) | you, for an unknown model (from the probe) | the daemon | report layout overrides |
 | KWin `outputArea` | the toggle only | — | the pen's mapping; the device's `size` gives the tablet's aspect |
@@ -148,9 +150,9 @@ press followed by a toggle. Report layouts per product id, conf keys override.
 - **chunk: `watch`** — the loop: hidraw reports → touch, press, lift; the hold timer; the long-press timer (OFF through the toggle); learning; rescans; a conf edit is reloaded in place.
 - **chunk: `main`** — `--simulate`, or watch forever (sleeping while no tablet is connected).
 
-### `tablet-precision-size.sh` — one ring tick: SCALE ± 2 %
+### `tablet-precision-size.sh` — one ring tick: SCALE ± RING_STEP points
 - **chunk: `drag-guard`** — a relocate marker under 3 s old (the area is being dragged): exit, nothing changes.
-- **chunk: `step`** — SCALE ± 0.02, clamped to 0.05–0.80.
+- **chunk: `step`** — SCALE ± RING_STEP/100 (conf, default 2 points; junk = 2), clamped to 0.05–0.80.
 - **chunk: `conf-write`** — rewrites SCALE and DIM in place, keeping every other line.
 - **chunk: `resize-or-preview`** — mode on: `tablet-precision.sh resize` (the area itself, around its centre); off: the size preview unless one is running.
 
@@ -192,10 +194,11 @@ it lands on the same physical spot on a scaled display.
 ### `wacom_center.py` — the settings window
 - **chunk: `paths`** — the conf path, the toggle path, and the launcher table (personal copy) or the KWin names (public copy).
 - **chunk: `busget`** / **`detect_devices`** — KWin property reads; the pad name and the tablet aspect by capability. *(public copy only)*
-- **chunk: `read_conf`** / **`write_conf`** — SCALE, DIM, HOLD, LONG with defaults; write them keeping every other line.
+- **chunk: `read_conf`** / **`write_conf`** — SCALE, DIM, HOLD, LONG, RING_STEP with defaults; write them keeping every other line.
 - **chunk: `kread`** / **`kwrite`** — a pad key's chord in `kcminputrc [ButtonRebinds]`.
+- **chunk: `ring_read`** / **`ring_write`** — the ring binding (mode 1): the two chords and the tick angle; KWin's threshold = degrees × 120; reconfigures KWin.
 - **chunk: `set_launcher_shortcut`** — keeps the shortcut daemon in step with the two launcher keys. *(personal copy only)*
-- **chunk: `PrecisionTab`** — the size and dim sliders, the hold and long-press fields (seconds, 2 decimals, from 0), the toggle button; saves on release or change.
+- **chunk: `PrecisionTab`** — the size and dim sliders, the hold and long-press fields (seconds, from 0), the ring step, tick angle and direction swap, the toggle button; saves on change.
 - **chunk: `PadTab`** — one chord field per key, validation, the layout warning, apply.
 - **chunk: `main`** — the window, the tabs, the two launcher buttons.
 
@@ -204,9 +207,9 @@ it lands on the same physical spot on a scaled display.
 `bash -n`, `check_map.py`, then `test_script.sh` (the toggle through on, move,
 resize around the centre with the clamp, suspend, resume and off, the run
 lock, with a stubbed `busctl` and a fake overlay), `test_size.sh` (the ring
-script: the step and its clamps, the resize only with the mode on, the
-preview only with it off, nothing while the marker is fresh; a stub toggle
-and a fake preview) and `test_hover.py` (the daemon with a named pipe as the
+script: the step and its clamps, RING_STEP from the conf, the resize only
+with the mode on, the preview only with it off, nothing while the marker is
+fresh; a stub toggle and a fake preview) and `test_hover.py` (the daemon with a named pipe as the
 pad, a fake pen, fake overlays and a fake toggle that logs its modes; the
 `waiting` / `solid` lines; a conf edit mid-rest; HOLD 0; the long press and
 what must not arm it). Every rig takes

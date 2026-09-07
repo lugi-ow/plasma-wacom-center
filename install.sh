@@ -86,8 +86,8 @@ if [ -n "$pad" ]; then
     if [ "$yn" = "y" ] || [ "$yn" = "Y" ]; then
         kwriteconfig6 --notify --file kcminputrc --group ButtonRebinds \
             --group TabletRing --group "$pad" --group 0 --key 0 \
-            "AxisKey,Meta+Shift+F10,Meta+Shift+F9,360"
-        echo "Ring bound: one step per ~15 degrees."
+            "AxisKey,Meta+Shift+F10,Meta+Shift+F9,600"
+        echo "Ring bound: one tick per 5-degree step of the ring (KWin's threshold is degrees x 120); change the step and the angle in Wacom Center."
     fi
 else
     echo "No tablet pad detected (tablet asleep?). Re-run later for the ring."
@@ -119,7 +119,9 @@ D. ExpressKey touch preview - a ghost of the precision area while a finger
    RESTS on the precision key, before the press. Wacom Intuos Pro (2017 or
    later): nothing to set up. After step A and a relogin, press the
    precision key once; the daemon learns which key it is and from then on
-   a resting finger shows the ghost. Other tablets: only keys with a touch
+   a resting finger shows the ghost. With the mode on, a resting finger
+   drags the area, a press lands it, and keeping the key pressed leaves the
+   mode (both times are fields in Wacom Center). Other tablets: only keys with a touch
    sensor can do this (Intuos Pro, Cintiq Pro, MobileStudio Pro). For a
    Wacom model the daemon does not know, run
    ~/.local/bin/tablet-pad-probe.py once per connection type (USB and

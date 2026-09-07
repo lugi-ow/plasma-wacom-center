@@ -60,5 +60,15 @@ sed -i 's/^SCALE=.*/SCALE=0.06/' "$CONF"; "$T" down; "$T" down; sleep 0.3
 check "6 down from 0.06 twice: clamped at 0.0500" 'grep -qx "SCALE=0.0500" "$CONF"'
 check "6 DIM still kept"                      'grep -qx "DIM=0.10" "$CONF"'
 
+# 7: RING_STEP from the conf: 5 points per tick, then half a point; the line itself is kept
+printf 'SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nRING_STEP=5\n' > "$CONF"
+"$T" up; sleep 0.3
+check "7 RING_STEP=5: 0.29 -> 0.3400"         'grep -qx "SCALE=0.3400" "$CONF"'
+check "7 RING_STEP line kept"                 'grep -qx "RING_STEP=5" "$CONF"'
+sed -i 's/^RING_STEP=.*/RING_STEP=0.5/' "$CONF"; "$T" down; sleep 0.3
+check "7 RING_STEP=0.5: 0.34 -> 0.3350"       'grep -qx "SCALE=0.3350" "$CONF"'
+sed -i 's/^RING_STEP=.*/RING_STEP=junk/' "$CONF"; "$T" up; sleep 0.3
+check "7 RING_STEP=junk: the 2-point default"  'grep -qx "SCALE=0.3550" "$CONF"'
+
 echo "failures: $FAILS"
 [ "$FAILS" -eq 0 ]

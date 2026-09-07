@@ -1,5 +1,7 @@
 #!/bin/bash
-# tablet-precision-size.sh {up|down} - step the precision area size +/-2%.
+# tablet-precision-size.sh {up|down} - step the precision area size by
+# RING_STEP percentage points of the screen width (conf key, default 2;
+# the Wacom Center ring field).
 #
 # Called by the tablet ring (mode 1) through two F-key chords. Writes SCALE
 # to ~/.config/tabprec.conf, then: precision mode ON - the area itself takes
@@ -26,8 +28,8 @@ if [ -f "$MARK" ] && [ $(( $(date +%s) - $(stat -c %Y "$MARK" 2>/dev/null || ech
 fi
 
 # ── chunk: step
-STEP=0.02
-[ "$1" = "down" ] && STEP=-0.02
+STEP=$(awk -v p="${RING_STEP:-2}" 'BEGIN{ if (p + 0 <= 0) p = 2; printf "%.4f", p / 100 }')   # points per tick, from the conf
+[ "$1" = "down" ] && STEP="-$STEP"
 SCALE=$(awk -v s="$SCALE" -v d="$STEP" 'BEGIN{
     s += d; if (s > 0.80) s = 0.80; if (s < 0.05) s = 0.05;
     printf "%.4f", s}')

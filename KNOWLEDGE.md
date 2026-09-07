@@ -28,8 +28,13 @@ After a relogin the daemon rebuilds everything from `kglobalshortcutsrc`.
 
 **Ring bindings** live in `kcminputrc` as
 `[ButtonRebinds][TabletRing][<pad device name>][<mode>]` with
-`0=AxisKey,<up chord>,<down chord>,<threshold>` - threshold 120 fires every
-~5 degrees of ring travel, 360 every ~15.
+`0=AxisKey,<up chord>,<down chord>,<threshold>`. The threshold is NOT in
+degrees: KWin takes the degrees travelled since the last tick, multiplies
+them by 120 (the mouse-wheel notch convention) and fires one chord when
+that reaches the threshold, then restarts from the current position. The
+Intuos Pro ring reports 5-degree steps, so any threshold up to 600 fires on
+every step (72 ticks per turn) and 1800 fires every 15 degrees. An earlier
+version of this note said 120 was 5 degrees and 360 was 15; it was wrong.
 
 **The pen's screen position is not exposed to scripts.** KWin's scripting
 `workspace.cursorPos` is hardwired to the mouse. Two usable sources instead,
