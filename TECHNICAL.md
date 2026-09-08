@@ -71,6 +71,17 @@ size preview (the ring, mode off) sits at the centre of the screen.
 Right after a Bluetooth reconnect, evdev reports 0,0 until the pen first
 hovers the tablet.
 
+Evdev gives the position on the TABLET. It is the position on the screen
+only while the whole tablet is mapped to the whole screen, which is not
+true in precision mode. `--mapped` puts the evdev position through the
+pen's live `outputArea` — the rectangle precision mode maps it to — and
+prints the pixel the pen cursor is really on. Without the flag the plain
+full-tablet stretch is printed, which is the space the cursor-stationary
+placement works in. The XWayland source already reports the mapped
+position (its valuators are the screen scaled into 0..262143), so
+`--mapped` leaves it alone. `tablet-pie.sh` is the one caller that uses
+the flag.
+
 ## The overlay
 
 `tablet-overlay.qml` is one drawing: four dim bands around the clear area
@@ -119,8 +130,10 @@ screen exits at once. libinput counts ring degrees counter-clockwise. The
 
 Kando asks KWin for the pointer and gets the mouse. KWin keeps a separate
 cursor for the pen. So a pie opened from a pad key lands where the mouse
-was last left. `tablet-pie.sh` reads the pen position, moves the mouse
-there with `tablet-pointer-warp.py`, then runs `kando --menu "<name>"`.
+was last left. `tablet-pie.sh` reads the pen position (`--mapped`, so a pie
+opened in precision mode does not land at the matching spot of the whole
+screen), moves the mouse there with `tablet-pointer-warp.py`, then runs
+`kando --menu "<name>"`.
 Without a pen position (tablet asleep, no udev rule) it runs `kando --menu`
 at the mouse.
 
@@ -325,7 +338,5 @@ bash only: no Qt, no tablet, no KWin. Exit 0 = all green.
 | `tests/test_size.sh` (19 checks) | the ring script: the step and its clamps, `RING_STEP` from the conf, resize only with the mode on, the preview only with it off, nothing while the marker is fresh |
 | `tests/test_hover.py` (36 checks) | the daemon: a named pipe plays the pad, a fake pen, fake overlays, a fake toggle. The ghost, the drag, `waiting` and `solid`, a conf edit mid-rest, `HOLD` 0, the long press and what must not arm it |
 
-Not part of the gate: `tests/smoke_center.py` builds the Precision tab
-offscreen and prints the fields and the conf write (needs PyQt6).
-`tests/add_markers.py` puts a chunk marker above every new def, function or
-mode (idempotent).
+Not part of the gate: `tests/add_markers.py` puts a chunk marker above every
+new def, function or mode (idempotent).

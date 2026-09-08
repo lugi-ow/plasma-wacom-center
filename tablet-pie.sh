@@ -10,12 +10,17 @@
 # the menu. No pen position (tablet asleep, udev rule missing) -> plain
 # kando --menu at the mouse, as before.
 #
+# --mapped: in precision mode the pen is mapped to a small rectangle, so the
+# pen's place on the TABLET is not its place on the screen - without the flag
+# the menu jumped to the matching spot of the whole screen (the area centre
+# opened it at the screen centre).
+#
 # install.sh binds Meta+Shift+F11 -> net.local.tabpie.desktop -> this file;
 # put that chord on a pad button (F-keys + modifiers only, see the README).
 # ── chunk: warp-then-open
 DIR=$(cd "$(dirname "$0")" && pwd)
 MENU=${1:-Krita}
-if POS=$(python3 "$DIR/tablet-pen-pos.py" 2>/dev/null); then
+if POS=$(python3 "$DIR/tablet-pen-pos.py" --mapped 2>/dev/null); then
     set -- $POS
     python3 "$DIR/tablet-pointer-warp.py" "$1" "$2" "$3" "$4" 2>/dev/null
 fi

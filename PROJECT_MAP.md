@@ -100,12 +100,16 @@ overlay. One run at a time; a run reads the conf after taking the lock.
 Best source first: the kernel's evdev state of the pen node (needs the udev
 uaccess rule), then XWayland's stylus valuators (fresh only over X11 windows).
 Exit 1 when neither works; callers fall back to the mouse. `DEBUG=1` traces.
+Plain, evdev is stretched over the whole screen — the space the
+cursor-stationary math wants; `--mapped` puts it through the pen's live
+outputArea instead, for a caller that needs the pixel the cursor is on.
 - **chunk: `trace`** — stderr tracing under DEBUG=1.
 - **chunk: `screen_size`** — the X screen size (physical pixels) and the display handle.
 - **chunk: `evdev_pen_norm`** — normalized pen position from EVIOCGABS on the pen node.
 - **chunk: `XIAnyClassInfo`** / **`XIValuatorClassInfo`** / **`XIDeviceInfo`** — ctypes mirrors of the XInput2 structs.
 - **chunk: `xwayland_stylus_norm`** — normalized position of the first enabled stylus device, via XIQueryDevice.
-- **chunk: `main-flow`** — evdev, then XWayland, then exit 1; prints pixels.
+- **chunk: `output_area`** — the pen's live outputArea from KWin (the precision rectangle) for `--mapped`; sysname from the toggle's cache, no cache or no answer = the whole screen.
+- **chunk: `main-flow`** — evdev, then XWayland, then exit 1; `--mapped` puts an evdev position through the area; prints pixels.
 
 ### `tablet-overlay.py` — the dim-around overlay
 One process per overlay. Args `X Y W H [DIM]`; `--waiting` starts it in the
@@ -173,7 +177,7 @@ precision mode comes on.
 - **chunk: `first-show`** — the initial mtime, the first draw, the first hold.
 
 ### `tablet-pie.sh` — a Kando pie under the pen
-- **chunk: `warp-then-open`** — pen position → mouse warp → `kando --menu`; no position = the menu at the mouse.
+- **chunk: `warp-then-open`** — pen position (`--mapped`, so precision mode does not throw the menu across the screen) → mouse warp → `kando --menu`; no position = the menu at the mouse.
 
 ### `tablet-pointer-warp.py` — move the mouse to X Y without root
 A short-lived virtual absolute mouse on `/dev/uinput`: waits until KWin lists
@@ -217,6 +221,12 @@ pad, a fake pen, fake overlays and a fake toggle that logs its modes; the
 what must not arm it). Every rig takes
 `<scratch dir> <script path>`. `add_markers.py <dir> [out dir]` puts a marker
 above every new def, function or mode (idempotent; block markers are listed
-inside it). `smoke_center.py <wacom_center.py> <scratch dir>` builds the
-Precision tab headless and checks the hold field and the conf write (needs
-PyQt6).
+inside it).
+
+### `install.sh` — the installer *(public copy only)*
+Five steps: the scripts into `~/.local/bin`, the `.desktop` launcher entries
+with the command-shortcut marker, the four chords registered with
+kglobalaccel, the optional ring binding, and the manual steps it prints (the
+udev rule that needs one sudo, the pad buttons, the relogin). It also writes
+the daemon's autostart entry, and is safe to re-run. No chunk markers: the
+numbered steps it echoes are the map. The personal copy installs by hand.

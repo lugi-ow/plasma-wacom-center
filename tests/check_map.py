@@ -16,8 +16,9 @@ marker, unless the bullet is tagged *(public copy only)* or *(personal copy
 only)*; a marker above a def / class / bash function / case mode carries that
 thing's name (a mis-named marker is a stale one); markers are unique within a
 file; every source file has a "### `file`" section and every section names a
-file (a name ending in "/" is a directory); bullets stay short: 200 characters
-each, 120 on average. Exit 0 = clean.
+file (a name ending in "/" is a directory) - a HEADING carrying the same
+*(… copy only)* tag may name a file the other copy has and this one has not;
+bullets stay short: 200 characters each, 120 on average. Exit 0 = clean.
 """
 import os
 import re
@@ -67,8 +68,9 @@ def markers_in(path):
 
 
 def parse_map():
-    """{section name: [(names in the bullet, exempt, bullet length)]}, in map order."""
-    sections, current = {}, None
+    """({section: [(names in the bullet, exempt, bullet length)]}, {section tagged
+    *(… copy only)*}), in map order."""
+    sections, only, current = {}, set(), None
     with open(MAP, encoding="utf-8") as f:
         for line in f:
             line = line.rstrip("\n")
@@ -76,6 +78,8 @@ def parse_map():
             if h:
                 current = h.group(1)
                 sections.setdefault(current, [])
+                if "copy only)*" in line:
+                    only.add(current)
                 continue
             if current is None or not BULLET.match(line):
                 continue
@@ -83,15 +87,17 @@ def parse_map():
             names = NAME.findall(head)
             exempt = "copy only)*" in line
             sections[current].append((names, exempt, len(line)))
-    return sections
+    return sections, only
 
 
 def main():
     problems = []
-    sections = parse_map()
+    sections, only = parse_map()
     files = sources()
     for name in sections:
         target = os.path.join(ROOT, name)
+        if name in only:                      # a file the other copy has: install.sh, say
+            continue
         if not (os.path.isdir(target) if name.endswith("/") else os.path.isfile(target)):
             problems.append(f"map: section `{name}` names nothing that exists")
     lengths = []
