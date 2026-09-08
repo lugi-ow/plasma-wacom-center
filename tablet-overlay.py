@@ -46,6 +46,9 @@ if len(args) not in (4, 5):
 
 # ── chunk: window
 app = QGuiApplication(sys.argv[:1])
+# app_id for a normal toplevel; inert here - tablet-overlay.qml is a layer-shell
+# surface, which carries none, so KWin reports the interpreter name instead.
+app.setDesktopFileName("wacom-center")
 engine = QQmlApplicationEngine()
 qml = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tablet-overlay.qml")
 engine.load(QUrl.fromLocalFile(qml))

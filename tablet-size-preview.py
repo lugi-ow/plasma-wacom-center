@@ -72,6 +72,9 @@ def read_conf():
 
 # ── chunk: window
 app = QGuiApplication(sys.argv)
+# app_id for a normal toplevel; inert here - tablet-overlay.qml is a layer-shell
+# surface, which carries none, so KWin reports the interpreter name instead.
+app.setDesktopFileName("wacom-center")
 screen = app.primaryScreen().size()
 ASPECT = tablet_aspect()
 engine = QQmlApplicationEngine()

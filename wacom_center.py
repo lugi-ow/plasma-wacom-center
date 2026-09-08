@@ -143,8 +143,11 @@ class PrecisionTab(QWidget):
         self.aspect = aspect
         self.pad = pad
         conf = read_conf()
-        screen = QGuiApplication.primaryScreen().size()
-        self.sw, self.sh = screen.width(), screen.height()
+        screen = QGuiApplication.primaryScreen()
+        self.sw = screen.size().width() if screen else 0
+        self.sh = screen.size().height() if screen else 0
+        if self.sw < 1 or self.sh < 1:      # no output (the monitor asleep): Qt hands out a 0x0 placeholder screen
+            self.sw, self.sh = 1920, 1080   # a plausible desktop, so the labels still read; the conf keeps a fraction, never these pixels
 
         layout = QVBoxLayout(self)
         self.size_label = QLabel()
@@ -301,6 +304,7 @@ class PadTab(QWidget):
 # ── chunk: main
 def main():
     app = QApplication(sys.argv)
+    app.setDesktopFileName("wacom-center")   # the Wayland app_id KWin reports; without it, the interpreter name
     app.setWindowIcon(QIcon.fromTheme("input-tablet"))
     pad, aspect = detect_devices()
     win = QWidget()
