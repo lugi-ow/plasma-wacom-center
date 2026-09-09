@@ -55,6 +55,33 @@ motion, and removes it again, all in about 150 ms - no root, no portal
 dialog. libinput maps the motion as a fraction of the axis range, so the
 pointer lands on the same physical spot at any display scale.
 
+**A warp racing KWin's own chord loses; a chord sent after the warp on the
+same device cannot.** A pad key bound in `kcminputrc` fires its chord
+INSIDE KWin's handling of the pad button, in the same pass of the event
+loop: `busctl monitor` shows KWin's `globalShortcutPressed` signal, then
+Kando's `loadScript` 0.6 ms later and `run` (the `workspace.cursorPos`
+read) 1.2 to 2.2 ms after the signal. A warp started from the same HID
+report needs a userspace round trip (select wake, evdev reads, uinput
+writes, libinput, back into KWin) and landed 1 to 4 ms after that read -
+the pie opened one press behind, every press (2026-09-09). The touch sense
+cannot close the race either: over Bluetooth it led only 3 presses of 7,
+and the pen kept moving after the finger landed, so the early warp was
+itself stale. The fix is structural, not temporal: conf `CHORD_<n>` sets
+the pad key to `Disabled` in kcminputrc and the daemon presses the chord
+itself right after the warp on the SAME virtual device - the kernel,
+libinput and KWin process one device's events in write order, so the
+motion is in place before the chord triggers anything. `Disabled`, not a
+deleted entry: KWin hands an unbound pad button to a tablet-aware app over
+the tablet-pad protocol. The daemon keeps that one device for its whole
+life: creating one per press would spend milliseconds on KWin's device
+enumeration, and the chord's keys must already be registered.
+
+**The kernel drops an unchanged ABS value.** `input_handle_abs_event`
+ignores an `ABS_X` whose value equals the axis's current one. A long-lived
+virtual mouse that warps to the spot of its previous warp sends a frame
+with no events, and the pointer stays wherever the real mouse moved it
+since. Send a first frame one unit away, then the real one.
+
 **A sleeping monitor removes the output.** When a DisplayPort monitor goes
 to standby, the link drops, KWin removes the output and runs a
 `Placeholder-1` screen of 1920x1080. `workspace.virtualScreenSize` and

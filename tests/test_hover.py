@@ -37,6 +37,7 @@ os.environ["FAKE_LOG"] = str(GHOST_LOG)
     "#!/bin/bash\ncase \"$1\" in where) echo '909 475 742 490 0.10 2560 1440';; "
     "*) echo \"CALL $1\" >> \"$FAKE_LOG\";; esac\n")
 shutil.copy(HERE / "fake" / "tablet-overlay.py", FAKE / "tablet-overlay.py")
+shutil.copy(SRC.parent / "tablet-pointer-warp.py", FAKE / "tablet-pointer-warp.py")   # real Warper loads it (K)
 for f in FAKE.iterdir():
     f.chmod(0o755)
 hover.DIR = FAKE
@@ -44,6 +45,35 @@ hover.DIR = FAKE
 PEN = [(0.5, 0.5)]
 hover.pen_open = lambda: os.open("/dev/null", os.O_RDONLY)
 hover.pen_norm = lambda fd: PEN[0]
+WARPS = []                                # (pen position, mapped) per warp the daemon asked for
+EVENTS = []                               # warps and chords in daemon order: the warp must precede the chord
+
+
+class FakeWarper:                         # never the real one: it would move the desktop's mouse
+    def __init__(self):
+        self.held = {}
+
+    def ensure(self):
+        pass
+
+    def warp(self, mapped, why="press"):
+        WARPS.append((PEN[0], mapped))
+        EVENTS.append(("warp", PEN[0]))
+
+    def chord_down(self, tag, text, label):   # records what the daemon asked; validation is the real Warper's
+        if tag not in self.held:
+            self.held[tag] = text
+            EVENTS.append(("down", tag, text))
+
+    def chord_up(self, tag):
+        if self.held.pop(tag, None) is not None:
+            EVENTS.append(("up", tag))
+
+    def release_all(self):
+        for tag in list(self.held):
+            self.chord_up(tag)
+
+
 PAD = SCRATCH / "pad.fifo"
 os.mkfifo(PAD)
 hover.wacom_nodes = lambda: [(str(PAD), "bt", "0360")]
@@ -78,7 +108,7 @@ follower = hover.Follower()
 
 def daemon():
     while True:
-        if not hover.watch(hover.read_conf(), follower):
+        if not hover.watch(hover.read_conf(), follower, FakeWarper()):
             time.sleep(0.2)
 
 
@@ -91,6 +121,18 @@ def report(touch=0, press=0):
     r[0], r[283], r[282] = 0x80, touch, press
     os.write(writer, bytes(r))
     time.sleep(0.05)                      # hidraw never merges reports; a pipe would
+
+
+def poke():
+    """A conf edit reaches the daemon through the control pipe, not a poll."""
+    for _ in range(100):
+        if hover.CTL.exists():
+            break
+        time.sleep(0.02)
+    fd = os.open(hover.CTL, os.O_WRONLY | os.O_NONBLOCK)
+    os.write(fd, b"reload\n")
+    os.close(fd)
+    time.sleep(0.15)                      # the select loop wakes at once; margin for the reload
 
 
 fails = 0
@@ -119,6 +161,119 @@ report(touch=0)
 time.sleep(0.25)
 check("A lift ends the ghost process", ghost_pid and not os.path.exists(f"/proc/{ghost_pid}") and not follower.up)
 check("A no marker, no pipe lines", not MARK.exists() and not lines)
+check("A the finger landing warped once, at the touch, plain (precision off)", WARPS == [((0.5, 0.5), False)])
+
+# --- W: a finger landing on ANY key warps the mouse onto the pen, the press again ---
+PEN[0] = (0.25, 0.25)
+report(touch=0x03)                         # keys 1+2 together, away from the precision key
+time.sleep(0.05)
+check("W finger lands on keys 1+2: one warp, plain", WARPS[1:] == [((0.25, 0.25), False)])
+PEN[0] = (0.3, 0.3)
+report(touch=0x03, press=0x03)
+report(touch=0x03, press=0)
+report(touch=0)
+time.sleep(0.1)
+check("W the press warps again at the pen's new spot; the release and lift do not", WARPS[2:] == [((0.3, 0.3), False)])
+check("W keys 1+2: no ghost, no marker, nothing else", ghost().count("SPAWN") == 1 and not MARK.exists() and not lines)
+report(press=0x03)                         # a press the touch sense never saw: still one warp
+report(press=0)
+time.sleep(0.1)
+check("W a press without a touch warps too", len(WARPS) == 4)
+
+# --- K: CHORD_<n> from the conf: the daemon presses the chord AFTER the warp ---
+wspec = importlib.util.spec_from_file_location("warpmod", FAKE / "tablet-pointer-warp.py")
+warpmod = importlib.util.module_from_spec(wspec)
+wspec.loader.exec_module(warpmod)
+check("K parse: Meta+Shift+F8 -> Shift, Meta, F8 (KWin's modifier order)",
+      warpmod.parse_chord("Meta+Shift+F8") == [42, 125, 66])
+check("K parse: case-blind, Super = Meta, the F13 block", warpmod.parse_chord("super+f13") == [125, 183])
+check("K parse: a letter or an empty chord is refused",
+      warpmod.parse_chord("Q+F1") is None and warpmod.parse_chord("") is None)
+check("K parse: modifier-only refused for a press chord, two F-keys too",
+      warpmod.parse_chord("Meta") is None and warpmod.parse_chord("Ctrl+Shift") is None
+      and warpmod.parse_chord("F1+F2") is None)
+check("K parse: touch chords allow bare modifiers, in KWin's order",
+      warpmod.parse_chord("Ctrl", False) == [29] and warpmod.parse_chord("Ctrl+Shift", False) == [42, 29])
+check("K parse: Meta alone refused even for a touch (the launcher tap)",
+      warpmod.parse_chord("Meta", False) is None and warpmod.parse_chord("", False) is None)
+rw = hover.Warper()                        # the real one: mod loads from FAKE, fd stays None - no device touched
+rw.chord_down(("press", 2), "Meta+Shift+F8", "key 2")
+rw.chord_down(("press", 3), "Q+F1", "key 3")
+check("K real Warper without a device: nothing held, no crash", rw.held == {})
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\nCHORD_2=Meta+Shift+F8\nCHORD_3=Q+F1\n")
+poke()
+n_ev = len(EVENTS)
+PEN[0] = (0.4, 0.6)
+report(press=0x06)                         # keys 2+3 down in one report, no touch first
+time.sleep(0.05)
+check("K press: one warp first, then the chords in key order",
+      EVENTS[n_ev:] == [("warp", (0.4, 0.6)), ("down", ("press", 2), "Meta+Shift+F8"),
+                        ("down", ("press", 3), "Q+F1")])
+report(press=0x04)                         # key 2 up, key 3 still down
+time.sleep(0.05)
+check("K key 2's release lifts its chord only", EVENTS[n_ev + 3:] == [("up", ("press", 2))])
+report(press=0)
+time.sleep(0.05)
+check("K key 3's release lifts the rest", EVENTS[n_ev + 4:] == [("up", ("press", 3))])
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\nWARP=0\nCHORD_2=Meta+Shift+F8\n")
+poke()
+n_ev = len(EVENTS)
+report(press=0x02)
+report(press=0)
+time.sleep(0.05)
+check("K WARP=0: no warp, the chord still fires",
+      EVENTS[n_ev:] == [("down", ("press", 2), "Meta+Shift+F8"), ("up", ("press", 2))])
+
+# --- T: TOUCH_CHORD_<n>: held after the delay, released at the lift ---
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.3\nLONG=1.0\n"
+                "TOUCH_CHORD_2=Ctrl\nTOUCH_CHORD_3=Shift\nCHORD_3=Meta+Shift+F5\n")
+poke()
+n_ev = len(EVENTS)
+PEN[0] = (0.6, 0.4)
+report(touch=0x02)                         # finger lands on key 2: warp now, the chord only after HOLD
+time.sleep(0.15)
+check("T no touch chord before the delay (0.15 s into 0.3)",
+      EVENTS[n_ev:] == [("warp", (0.6, 0.4))])
+PEN[0] = (0.7, 0.5)                        # the pen moves during the delay
+time.sleep(0.3)
+check("T engaged after the delay: a FRESH warp, then the chord held",
+      EVENTS[n_ev + 1:] == [("warp", (0.7, 0.5)), ("down", ("touch", 2), "Ctrl")])
+report(touch=0)
+time.sleep(0.05)
+check("T lift releases the touch chord", EVENTS[n_ev + 3:] == [("up", ("touch", 2))])
+n_ev = len(EVENTS)
+report(touch=0x02)                         # a press before the delay wins: no touch chord this contact
+report(touch=0x02, press=0x02)
+report(touch=0x02, press=0)
+report(touch=0)
+time.sleep(0.5)                            # well past the delay: nothing may engage late either
+check("T press before the delay: warps only, no chord this contact",
+      [e for e in EVENTS[n_ev:] if e[0] != "warp"] == [])
+n_ev = len(EVENTS)
+report(touch=0x04)                         # key 3: engage, then press on top of the held chord
+time.sleep(0.45)
+report(touch=0x04, press=0x04)
+time.sleep(0.05)
+check("T press after the engage: the touch chord stays held, the press chord joins",
+      EVENTS[n_ev + 1:] == [("warp", (0.7, 0.5)), ("down", ("touch", 3), "Shift"),
+                            ("warp", (0.7, 0.5)), ("down", ("press", 3), "Meta+Shift+F5")])
+report(touch=0x04, press=0)
+report(touch=0)
+time.sleep(0.05)
+check("T releases mirror their triggers, the press first",
+      EVENTS[n_ev + 5:] == [("up", ("press", 3)), ("up", ("touch", 3))])
+n_ev = len(EVENTS)
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=1.0\nLONG=1.0\n"
+                "TOUCH_CHORD_2=Ctrl\nTOUCH_HOLD_2=0.1\n")
+poke()
+report(touch=0x02)                         # key 2's own register (0.1) beats the HOLD fallback (1.0)
+time.sleep(0.35)
+check("T per-key register: TOUCH_HOLD_2 overrides HOLD",
+      ("down", ("touch", 2), "Ctrl") in EVENTS[n_ev:])
+report(touch=0)
+time.sleep(0.05)
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\n")
+poke()
 
 # --- B: precision ON: hold -> relocation, lift -> snap back ---
 STATE.write_text("0 0 1 1\n")
@@ -156,6 +311,7 @@ report(touch=0x80, press=0x80)
 time.sleep(0.25)
 check("C press: marker kept for the toggle", MARK.exists())
 check("C press: border solid, no snap back", lines[n:] == ["solid"])
+check("C press mid-drag warps to the plain position (base mapping while aiming)", WARPS[-1] == ((0.9, 0.1), False))
 n = len(lines)
 report(touch=0x80, press=0)               # key released, finger still resting
 PEN[0] = (0.2, 0.2)
@@ -180,10 +336,16 @@ report(touch=0)
 time.sleep(0.9)
 check("D quick press: no marker, no pipe lines, no suspend", not MARK.exists() and len(lines) == n
       and ghost().count("CALL suspend") == 2)
+check("D quick press while ON warps through the area (mapped)", WARPS[-1] == ((0.2, 0.2), True))
 
-# --- E: HOLD from the conf, picked up without a restart ---
-CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=1.2\n")
-time.sleep(2.6)                            # the 2 s rescan reloads it
+# --- E: HOLD from the conf, picked up through the control pipe ---
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=1.2\nWARP=0\n")
+poke()
+n_warps = len(WARPS)
+report(press=0x03)
+report(press=0)
+time.sleep(0.1)
+check("E WARP=0 reloaded: a press warps nothing", len(WARPS) == n_warps)
 n = len(lines)
 report(touch=0x80)
 time.sleep(0.9)
@@ -194,25 +356,26 @@ report(touch=0)
 time.sleep(0.25)
 check("E lift snaps home", lines[-2:] == [HOME, "solid"] and not MARK.exists())
 
-# --- G: the conf edited while the finger already rests (a ring tick, a Center slider): the hold still ends in a drag ---
+# --- G: the conf reloaded while the finger already rests: the hold still ends in a drag ---
 CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=2.5\n")
-time.sleep(2.6)
+poke()
 n = len(lines)
 report(touch=0x80)
 time.sleep(0.3)
-CONF.write_text("SCALE=0.31\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=2.5\n")   # a ring tick mid-rest; a rescan sees it before the hold ends
+CONF.write_text("SCALE=0.31\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=2.5\n")   # a poke mid-rest reloads before the hold ends
+poke()
 time.sleep(2.6)
-check("G conf edited mid-rest: the drag still starts", MARK.exists() and len(lines) == n + 2 and lines[-2] == "waiting")
+check("G conf reloaded mid-rest: the drag still starts", MARK.exists() and len(lines) == n + 2 and lines[-2] == "waiting")
 report(touch=0)
 time.sleep(0.25)
 check("G lift snaps home", lines[-2:] == [HOME, "solid"] and not MARK.exists())
 CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\n")
-time.sleep(2.6)
+poke()
 
 # --- H: no floor on HOLD, and the LONG PRESS out of precision mode ---
 calls = lambda: ghost().count("CALL toggle")
 CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0\nLONG=1.0\n")
-time.sleep(2.6)
+poke()
 n = len(lines)
 report(touch=0x80)
 time.sleep(0.1)
@@ -220,7 +383,7 @@ check("H HOLD=0: the drag starts at the first touch report", MARK.exists() and l
 report(touch=0)
 time.sleep(0.25)
 CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\n")
-time.sleep(2.6)
+poke()
 report(touch=0x80)
 time.sleep(0.9)
 check("H drag on, no toggle call so far", MARK.exists() and calls() == 0)
@@ -252,7 +415,7 @@ check("H press before a drag, held 1.4 s: not armed", calls() == 1 and not MARK.
 report(touch=0)
 time.sleep(0.25)
 CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=0\n")
-time.sleep(2.6)
+poke()
 report(touch=0x80)
 time.sleep(0.9)
 report(touch=0x80, press=0x80)
@@ -262,7 +425,24 @@ report(touch=0)
 time.sleep(0.25)
 MARK.unlink(missing_ok=True)
 CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\n")
-time.sleep(2.6)
+poke()
+
+# --- M: the precision key's touch and press belong to the mode, never to a chord ---
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.2\nLONG=1.0\n"
+                "TOUCH_CHORD_8=Alt\nCHORD_8=Meta+Shift+F6\n")
+poke()
+n_ev = len(EVENTS)
+report(touch=0x80)                         # resting on the precision key: the drag's, not a chord's
+time.sleep(0.5)
+report(touch=0x80, press=0x80)             # pressing it: the toggle's, not a chord's
+time.sleep(0.05)
+report(touch=0)
+time.sleep(0.25)
+check("M no chord ever for the mask key, warps only",
+      [e for e in EVENTS[n_ev:] if e[0] != "warp"] == [])
+MARK.unlink(missing_ok=True)               # the confirmed press left it for the (absent) toggle
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\n")
+poke()
 
 # --- F: no live overlay reading the pipe -> the hold does nothing ---
 reading = False

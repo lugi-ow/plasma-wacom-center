@@ -42,12 +42,12 @@
 #
 # Zero configuration on known models: the report layout (which report,
 # which byte holds the touch bits, which the press bits) is built in per
-# product id below, and the PRECISION KEY is learned - the first time a
-# single key press is followed by precision mode switching on or off, that
-# key's bit is saved to ~/.config/tabprec.conf as HOVER_MASK. Unknown
-# models: run tablet-pad-probe.py once per connection type and write
-# HOVER_REPORT_<BUS> / HOVER_BYTE_<BUS> / PRESS_BYTE_<BUS> (BUS = USB or
-# BT); HOVER_MASK_<BUS> / PRESS_MASK_<BUS> override the learned key. Conf
+# product id below. The PRECISION KEY is defined, not guessed: Wacom
+# Center's Precision column writes its bit to ~/.config/tabprec.conf as
+# HOVER_MASK (no key ticked = no HOVER_MASK = the ghost and the drag stay
+# off). Unknown models: run tablet-pad-probe.py once per connection type
+# and write HOVER_REPORT_<BUS> / HOVER_BYTE_<BUS> / PRESS_BYTE_<BUS> (BUS
+# = USB or BT); HOVER_MASK_<BUS> / PRESS_MASK_<BUS> override per bus. Conf
 # keys always win over the built-ins. Bluetooth and USB use different
 # layouts; the daemon switches by itself when the tablet changes bus.
 #
@@ -56,11 +56,51 @@
 # the pen is polled from its evdev node (EVIOCGABS, ~30 Hz) and the
 # rectangle is re-placed with the toggle's formula x = cx/sw*(sw-w). After
 # a press nothing happens until the finger has left the key. The conf is
-# re-read when it changes (HOLD, HOVER_* keys). Messages go to stderr (the
-# journal under autostart).
+# re-read when a line arrives on $XDG_RUNTIME_DIR/tabprec/hover.ctl -
+# Wacom Center pokes that pipe on every Apply and delay change; after a
+# hand edit, `echo reload > .../hover.ctl` does the same (a reload waits
+# until no rectangle follows the pen). Hardware still polls: the nodes
+# are rescanned every 2 s - the tablet announces nothing on its own.
+# Messages go to stderr (the journal under autostart).
+#
+# A finger landing on ANY pad key also WARPS THE MOUSE onto the pen (and the
+# press does it again). KWin keeps the mouse pointer and the pen cursor apart,
+# and whatever asks it "where is the pointer" - Kando placing a pie,
+# workspace.cursorPos - gets the mouse, so a menu bound to a pad key's chord
+# opened wherever the mouse was left. For a key bound in kcminputrc the warp
+# is a race the daemon LOSES: KWin synthesizes the chord inside its own
+# handling of the pad button and Kando reads the pointer ~2 ms later, while
+# the warp needs a userspace round trip from the same HID report - the pie
+# opened one press behind, every time (measured 2026-09-09; the touch sense
+# leads only sometimes over Bluetooth, so it cannot close the race either).
+# CHORD_<n> in the conf ends the race: pad key n is set to DISABLED in
+# kcminputrc (Disabled, not a deleted line - KWin hands an unbound pad
+# button to a tablet-aware app) and the daemon presses the chord itself
+# (tablet-pointer-warp.py parse_chord/chord: modifiers in KWin's own order,
+# then one F-key) right after the warp on the SAME virtual device - one
+# device, one write order, KWin processes the motion first,
+# deterministically. The chord is held until the key is released, like a
+# real key (Kando's turbo mode keeps working); a lost node releases it. n =
+# the daemon's key number = press-byte bit n-1, the numbering HOVER_MASK
+# uses. Conf WARP=0 switches the warp off (chords still fire); the touch
+# warp stays as a best effort for keys kcminputrc still owns.
+#
+# TOUCH_CHORD_<n> holds a chord DOWN while a finger RESTS on key n and
+# releases it at the lift - a held Ctrl for Blender's sculpt, a pie on a
+# touch. The finger must rest key n's TOUCH REGISTER first (conf
+# TOUCH_HOLD_<n>, the Pad tab's per-key column; conf HOLD is the fallback
+# default; 0 = at once); a press that comes sooner wins - that contact fires
+# only the press action and no touch chord until the finger has left the
+# key. A press AFTER the chord engaged keeps it held (Ctrl+click combos).
+# Bare modifiers are allowed here, except Meta alone (a lone synthetic
+# Meta press-and-release is kglobalaccel's launcher tap). The warp repeats
+# right before the chord engages, so a pie bound to a touch opens under
+# the pen. The precision key's touch belongs to the ghost and the drag:
+# a TOUCH_CHORD on that key is ignored.
 #
 # --simulate: draw the ghost for 3 s, following the pen, and exit.
 import fcntl
+import importlib.util
 import os
 import re
 import select
@@ -76,13 +116,13 @@ STATE = RD / "saved-area"           # exists while precision mode is ON
 AREA = RD / "area"                  # "X Y W H DIM SW SH FX FY FW FH" of the mapping precision mode has on (the toggle writes it)
 FIFO = RD / "overlay.fifo"          # the live overlay's geometry pipe (tablet-overlay.py --fifo)
 MARK = RD / "relocate"              # kept fresh while the overlay follows the pen: the toggle moves (< 3 s old) instead of switching off
+CTL = RD / "hover.ctl"              # a line here = re-read the conf (Wacom Center pokes it on Apply)
 DIR = Path(__file__).resolve().parent
 SHOW_DELAY = 0.06                    # touch sense must hold this long before the ghost (debounce)
 HOLD_DEFAULT = 0.15                  # ...and this long before a relocation (precision on); conf key HOLD, Wacom Center field
 LONG_DEFAULT = 0.7                   # a press that confirmed a drag, kept down this long, switches precision mode off; conf key LONG, 0 = off
-RESCAN = 2.0                        # seconds between checks for new/lost nodes and conf edits
+RESCAN = 2.0                        # seconds between checks for new/lost hidraw nodes (hardware only)
 TICK = 0.03                          # poll period while a rectangle follows the pen or a press is being judged
-LEARN_WINDOW = 2.0                   # a precision toggle this soon after a one-key press names the key
 BUS = {"0003": "usb", "0005": "bt"}
 
 # ── chunk: FAMILIES
@@ -125,34 +165,6 @@ def read_conf():
     return values
 
 
-# ── chunk: conf_stamp
-def conf_stamp():
-    try:
-        return CONF.stat().st_mtime_ns
-    except OSError:
-        return None
-
-
-# ── chunk: save_conf_key
-def save_conf_key(key, value):
-    """Set key=value in tabprec.conf and keep every other line."""
-    try:
-        lines = CONF.read_text().splitlines()
-    except OSError:
-        lines = []
-    out, done = [], False
-    for line in lines:
-        if line.split("=", 1)[0].strip() == key:
-            if not done:
-                out.append(f"{key}={value}")
-                done = True
-            continue
-        out.append(line)
-    if not done:
-        out.append(f"{key}={value}")
-    CONF.write_text("\n".join(out) + "\n")      # in place: keeps watchers on the file
-
-
 # ── chunk: as_int
 def as_int(text, default=None):
     try:
@@ -161,17 +173,27 @@ def as_int(text, default=None):
         return default
 
 
+# ── chunk: touch_delay
+def touch_delay(conf, n=None):
+    """Key n's touch register (the Pad tab's per-key column): seconds a
+    resting finger waits before its touch action starts - a touch chord,
+    the area drag. Conf TOUCH_HOLD_<n>, falling back to HOLD, then the
+    default. No floor: 0 = at the first touch report."""
+    keys = (f"TOUCH_HOLD_{n}", "HOLD") if n else ("HOLD",)
+    for key in keys:
+        try:
+            return max(0.0, float(conf[key]))
+        except (KeyError, ValueError):
+            continue
+    return HOLD_DEFAULT
+
+
 # ── chunk: hold_delay
-def hold_delay(conf):
-    """Seconds a finger must rest before anything moves: the ghost debounce
-    with precision mode off, the relocation hold (conf HOLD, no floor: 0 =
-    at the first touch report) with it on."""
-    if not STATE.exists():
-        return SHOW_DELAY
-    try:
-        return max(0.0, float(conf.get("HOLD", HOLD_DEFAULT)))
-    except ValueError:
-        return HOLD_DEFAULT
+def hold_delay(conf, n=None):
+    """Seconds a finger must rest before a rectangle moves: the ghost
+    debounce with precision mode off, the precision key's touch register
+    with it on."""
+    return touch_delay(conf, n) if STATE.exists() else SHOW_DELAY
 
 
 # ── chunk: long_delay
@@ -385,17 +407,162 @@ class Follower:
             self.pen = None
 
 
+# ── chunk: Warper
+class Warper:
+    """The mouse pointer moved onto the pen when a finger lands on a pad key
+    (and again at the press), so that whatever the key's chord opens - a
+    Kando pie bound in Kando's own editor, anything that asks KWin where the
+    pointer is - lands under the pen. One virtual absolute mouse
+    (tablet-pointer-warp.py, imported from this file's folder), created once
+    and kept for the daemon's life: KWin lists it a single time and a warp
+    costs one motion event. The device also carries the chord alphabet's
+    keyboard keys: chord_down presses a conf CHORD_<n> right after the warp
+    on the same device (write order = KWin's processing order, so the warp
+    is in place before the chord opens anything), chord_up releases it with
+    the pad key, release_all sweeps up when a node goes away. Precision ON:
+    the pen's tablet position goes through the area's fractions from the
+    area file (the correction tablet-pen-pos.py --mapped makes); during a
+    drag the base mapping is back and the plain position is right. No
+    /dev/uinput, no KWin: the warper stays off with a line in the log,
+    retried every 30 s, and chords are skipped with a line."""
+    RETRY = 30.0
+
+    def __init__(self):
+        self.fd = None
+        self.next_try = 0.0
+        self.screen = None           # (sw, sh) for the log's pixels, when X answers
+        self.held = {}               # ("press" | "touch", key number) -> (codes, label) currently down
+        self.mod = None
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "tablet_pointer_warp", DIR / "tablet-pointer-warp.py")
+            self.mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(self.mod)
+        except Exception as err:                     # noqa: BLE001 - any import trouble = no warp, the rest runs
+            log(f"no pointer warp: {err}")
+
+    def ensure(self):
+        """Create the virtual mouse when there is none; a failure waits RETRY s."""
+        if self.fd is not None or self.mod is None or time.monotonic() < self.next_try:
+            return
+        self.next_try = time.monotonic() + self.RETRY
+        try:
+            self.fd, node = self.mod.create(self.mod.CHORD_KEYS)
+        except (OSError, RuntimeError) as err:
+            log(f"pointer warp off ({err}); next try in {self.RETRY:.0f} s")
+            return
+        try:
+            self.screen = self.mod.screen_size()
+        except (SystemExit, OSError):
+            self.screen = None
+        log(f"pointer warp ready: virtual mouse {node}")
+
+    def close(self):
+        if self.fd is not None:
+            self.mod.destroy(self.fd)   # the kernel releases any keys still down
+            self.fd = None
+        self.held.clear()
+
+    def chord_down(self, tag, text, label):
+        """Press a conf chord on the virtual device - called right after the
+        warp that triggered it, so the same fd carries the motion first and
+        the chord second. tag = ("press" | "touch", key number); a press
+        chord must carry one non-modifier key, a touch chord may be bare
+        modifiers (it is held, not tapped)."""
+        if tag in self.held:
+            return
+        codes = self.mod.parse_chord(text, tag[0] == "press") if self.mod else None
+        if codes is None:
+            log(f"chord ({label}) '{text}': outside the chord rules, ignored")
+            return
+        if self.fd is None:
+            log(f"chord ({label}): no virtual device, skipped")
+            return
+        try:
+            self.mod.chord(self.fd, codes, True)
+        except OSError as err:
+            log(f"chord failed ({err}); the virtual mouse is recreated")
+            self.close()
+            return
+        self.held[tag] = (codes, label)
+        log(f"chord ({label}): {text} down")
+
+    def chord_up(self, tag):
+        """Release a held chord: its pad key came up, the finger lifted, or
+        its node went away."""
+        entry = self.held.pop(tag, None)
+        if entry is None or self.fd is None:
+            return
+        codes, label = entry
+        try:
+            self.mod.chord(self.fd, codes, False)
+        except OSError as err:
+            log(f"chord release failed ({err}); the virtual mouse is recreated")
+            self.close()
+            return
+        log(f"chord ({label}): up")
+
+    def release_all(self):
+        """Every held chord up - a hidraw node vanished mid-press, or the
+        watch loop is leaving."""
+        for tag in list(self.held):
+            self.chord_up(tag)
+
+    def warp(self, mapped, why="press"):
+        """Move the mouse onto the pen; mapped = through the area on record.
+        why names the trigger in the log (touch / press)."""
+        if self.fd is None:
+            return
+        pen = pen_open()
+        if pen is None:
+            return
+        try:
+            norm = pen_norm(pen)
+        finally:
+            os.close(pen)
+        if norm is None:
+            return
+        fx, fy = norm
+        if mapped:
+            try:
+                ax, ay, aw, ah = map(float, AREA.read_text().split()[7:11])
+                fx, fy = ax + fx * aw, ay + fy * ah
+            except (OSError, ValueError):
+                pass                                 # no fractions on record: the plain stretch
+        try:
+            self.mod.warp(self.fd, fx, fy)
+        except OSError as err:
+            log(f"pointer warp failed ({err}); the virtual mouse is recreated")
+            self.close()
+            return
+        where = (f"({int(fx * self.screen[0])}, {int(fy * self.screen[1])})" if self.screen
+                 else f"({fx:.4f}, {fy:.4f}) of the screen")
+        log(f"warp ({why}): mouse to {where}" + (" in the precision area" if mapped else ""))
+
+
 # ── chunk: mask_text
 def mask_text(mask):
-    return "not learned yet" if mask is None else f"0x{mask:02x}"
+    return "none (no Precision key ticked)" if mask is None else f"0x{mask:02x}"
 
 
 # ── chunk: watch
-def watch(conf, follower):
-    """Follow the current set of hidraw nodes until it changes or goes away;
-    a conf edit is reloaded in place. False = there was nothing to watch."""
+def watch(conf, follower, warper=None):
+    """Follow the current set of hidraw nodes until it changes or goes away.
+    A line on the control pipe reloads the conf (deferred while a rectangle
+    follows the pen). False = there was nothing to watch."""
+    if warper is not None:
+        warper.ensure()
     nodes = wacom_nodes()
-    stamp = conf_stamp()
+    try:
+        os.mkfifo(CTL)
+    except FileExistsError:
+        pass
+    except OSError as err:
+        log(f"no control pipe ({err}): conf reloads need a daemon restart")
+    try:
+        ctl = os.open(CTL, os.O_RDWR | os.O_NONBLOCK)   # RDWR: pokers may come and go
+    except OSError:
+        ctl = None
     fds = {}                          # fd -> [path, bus, product, layout]
     for path, bus, product in nodes:
         layout = layout_for(conf, bus, product)
@@ -411,26 +578,38 @@ def watch(conf, follower):
         log(f"{path}: {bus} report 0x{layout['report']:02x}, touch byte {layout['touch']}, "
             f"press byte {layout['press']}, precision key {mask_text(layout['mask'])}")
     if not fds:
+        if ctl is not None:
+            os.close(ctl)
         return False
     pending = {}                      # fd -> time the touch began; None once acted on
     held = set()                      # fds whose key was pressed: nothing more until the finger leaves it
     down = {}                         # fd -> last press-byte value
+    rest = {}                         # fd -> last touch-byte value (a finger landing on any key warps the mouse)
     long_press = {}                   # fd -> deadline while a key pressed after a drag stays down: precision mode off at the deadline
-    learn = None                      # (key bit, deadline, precision was on) after a one-key press
+    touch_since = {}                  # (fd, bit) -> when the finger landed on a TOUCH_CHORD key; gone once engaged, pressed or lifted
+    reload_pending = False            # a control-pipe poke arrived; applied once nothing follows the pen
     last_scan = time.monotonic()
     try:
         while fds:
             now = time.monotonic()
             timeout = max(0.0, last_scan + RESCAN - now)
-            for since in pending.values():
+            for pfd, since in pending.items():
                 if since is not None:
-                    timeout = min(timeout, max(0.0, since + hold_delay(conf) - now))
+                    mask_n = (fds[pfd][3]["mask"] or 0).bit_length() or None
+                    timeout = min(timeout, max(0.0, since + hold_delay(conf, mask_n) - now))
+            for (tfd, bit), since in touch_since.items():
+                timeout = min(timeout, max(0.0, since + touch_delay(conf, bit + 1) - now))
             for deadline in long_press.values():
                 timeout = min(timeout, max(0.0, deadline - now))
-            if follower.up or learn:
+            if follower.up:
                 timeout = min(timeout, TICK)
-            ready, _, _ = select.select(list(fds), [], [], timeout)
+            readable = list(fds) + ([ctl] if ctl is not None else [])
+            ready, _, _ = select.select(readable, [], [], timeout)
             for fd in ready:
+                if fd == ctl:
+                    os.read(ctl, 4096)                        # drain; any content means "reload"
+                    reload_pending = True
+                    continue
                 lay = fds[fd][3]
                 try:
                     report = os.read(fd, 4096)
@@ -443,16 +622,52 @@ def watch(conf, follower):
                     held.discard(fd)
                     down.pop(fd, None)
                     long_press.pop(fd, None)
+                    for key in [k for k in touch_since if k[0] == fd]:
+                        del touch_since[key]
                     follower.hide(fd)
+                    if warper is not None:
+                        warper.release_all()      # a chord must not outlive its pad key's node
                     continue
                 if report[0] != lay["report"] or len(report) <= lay["touch"]:
                     continue
                 pb = lay["press"]
                 press_bits = report[pb] if pb is not None and len(report) > pb else 0
                 new_bits = press_bits & ~down.get(fd, 0)
+                gone_bits = down.get(fd, 0) & ~press_bits
                 down[fd] = press_bits
-                if new_bits and new_bits & (new_bits - 1) == 0:          # exactly one key went down
-                    learn = (new_bits, time.monotonic() + LEARN_WINDOW, STATE.exists())
+                touch_bits = report[lay["touch"]]
+                new_touch = touch_bits & ~rest.get(fd, 0)
+                gone_touch = rest.get(fd, 0) & ~touch_bits
+                rest[fd] = touch_bits
+                if (new_touch or new_bits) and warper is not None and conf.get("WARP", "1") != "0":
+                    # the mouse onto the pen when a finger LANDS on any key, and again at the press.
+                    # For a key kcminputrc owns this is best effort (KWin fires the chord inside its
+                    # own handling of the pad button; the warp can lose). A CHORD_<n> key is exact:
+                    # its chord goes out below, AFTER these motion frames, on the same device. Mapped
+                    # through the area while precision mode is on, unless a drag has the base mapping back.
+                    warper.warp(STATE.exists() and not (follower.up and follower.home is not None),
+                                "press" if new_bits else "touch")
+                if warper is not None and (new_bits or gone_bits or new_touch or gone_touch):
+                    # conf CHORD_<n> / TOUCH_CHORD_<n>: the daemon presses the chords itself - such a
+                    # key is Disabled in kcminputrc. Ups before downs (a report can swap keys); every
+                    # release mirrors its trigger, so a held chord stays held (Kando's turbo mode).
+                    # The precision key (the mask) is exempt: its touch is the ghost and the drag.
+                    mask_bit = lay["mask"] or 0
+                    for bit in range(8):
+                        key = 1 << bit
+                        if gone_touch & key:
+                            warper.chord_up(("touch", bit + 1))
+                            touch_since.pop((fd, bit), None)
+                        if gone_bits & key:
+                            warper.chord_up(("press", bit + 1))
+                        if new_bits & key:
+                            touch_since.pop((fd, bit), None)     # pressed before the delay: no touch chord this contact
+                            text = conf.get(f"CHORD_{bit + 1}", "")
+                            if text and not key & mask_bit:
+                                warper.chord_down(("press", bit + 1), text, f"key {bit + 1}")
+                        if (new_touch & key and not press_bits & key and not key & mask_bit
+                                and conf.get(f"TOUCH_CHORD_{bit + 1}", "")):
+                            touch_since[(fd, bit)] = time.monotonic()   # engages after the delay, below
                 if lay["mask"] is None:
                     continue                                              # key not known yet
                 touched = bool(report[lay["touch"]] & lay["mask"])
@@ -474,24 +689,24 @@ def watch(conf, follower):
                     pending.pop(fd, None)
                     follower.hide(fd)
             now = time.monotonic()
-            if learn:
-                bit, deadline, was_on = learn
-                if STATE.exists() != was_on:                              # that press toggled precision mode
-                    learn = None
-                    if any(node[3]["mask"] != bit for node in fds.values()):
-                        conf["HOVER_MASK"] = f"0x{bit:02x}"
-                        for node in fds.values():
-                            node[3] = layout_for(conf, node[1], node[2])
-                        try:
-                            save_conf_key("HOVER_MASK", f"0x{bit:02x}")
-                            stamp = conf_stamp()
-                            log(f"learned: the precision key is mask 0x{bit:02x} (saved to {CONF})")
-                        except OSError as err:
-                            log(f"learned mask 0x{bit:02x} but could not save it: {err}")
-                elif now > deadline:
-                    learn = None
+            for (tfd, bit), since in list(touch_since.items()):
+                if now - since < touch_delay(conf, bit + 1):
+                    continue                                              # not rested long enough yet
+                del touch_since[(tfd, bit)]
+                if tfd not in fds or down.get(tfd, 0) & (1 << bit):
+                    continue                                              # pressed meanwhile: this contact is spent
+                text = conf.get(f"TOUCH_CHORD_{bit + 1}", "")
+                if not text or warper is None:
+                    continue
+                if conf.get("WARP", "1") != "0":
+                    # a fresh warp right before the chord: the pen may have moved during the delay,
+                    # and a pie bound to the touch must open where the pen is NOW
+                    warper.warp(STATE.exists() and not (follower.up and follower.home is not None),
+                                "touch")
+                warper.chord_down(("touch", bit + 1), text, f"key {bit + 1} touch")
             for fd, since in list(pending.items()):
-                if since is not None and now - since >= hold_delay(conf):
+                mask_n = (fds[fd][3]["mask"] or 0).bit_length() or None
+                if since is not None and now - since >= hold_delay(conf, mask_n):
                     (follower.move if STATE.exists() else follower.show)(fd)
                     pending[fd] = None          # up (or refused); no timer until the next touch
             for fd, deadline in list(long_press.items()):
@@ -502,19 +717,26 @@ def watch(conf, follower):
                         log("long press: the toggle failed, precision mode stays on")
             if follower.up:
                 follower.follow()
+            if reload_pending and not follower.up:
+                reload_pending = False          # a Wacom Center Apply, a delay change, or a hand poke
+                conf = read_conf()              # a finger already resting on a key stays known
+                for node in fds.values():
+                    node[3] = layout_for(conf, node[1], node[2]) or node[3]
+                log("conf reloaded")
             if now - last_scan >= RESCAN:
                 last_scan = now
+                if warper is not None:
+                    warper.ensure()                 # a virtual mouse lost or never created: another try
                 if wacom_nodes() != nodes:
                     return True                 # bus switch or tablet gone: rescan
-                if not follower.up and conf_stamp() != stamp:
-                    conf = read_conf()          # conf edited (a ring tick, a Center slider): reload it in place,
-                    stamp = conf_stamp()        # a finger already resting on the key stays known
-                    for node in fds.values():
-                        node[3] = layout_for(conf, node[1], node[2]) or node[3]
     finally:
         for fd in fds:
             os.close(fd)
+        if ctl is not None:
+            os.close(ctl)
         follower.hide()
+        if warper is not None:
+            warper.release_all()
     return True
 
 
@@ -531,8 +753,9 @@ def main():
             time.sleep(TICK)
         follower.hide()
         return
+    warper = Warper()
     while True:
-        if not watch(read_conf(), follower):
+        if not watch(read_conf(), follower, warper):
             time.sleep(RESCAN)         # tablet asleep or not yet connected: poll
 
 

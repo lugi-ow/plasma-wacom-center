@@ -15,7 +15,7 @@ SRC = sys.argv[1]
 OUT = sys.argv[2] if len(sys.argv) > 2 else None
 FILES = ("tablet-precision.sh", "tablet-pen-pos.py", "tablet-overlay.py", "tablet-overlay.qml",
          "tablet-hover.py", "tablet-precision-size.sh", "tablet-size-preview.py",
-         "tablet-pie.sh", "tablet-pointer-warp.py", "tablet-pad-probe.py", "wacom_center.py")
+         "tablet-pointer-warp.py", "tablet-pad-probe.py", "wacom_center.py")
 # file -> [(line prefix that anchors the block, chunk name)]
 BLOCKS = {
     "tablet-precision.sh": [("export LC_ALL=C.UTF-8", "config-and-paths")],
@@ -32,7 +32,6 @@ BLOCKS = {
                                  ('if [ -f "$RD/saved-area" ]', "resize-or-preview")],
     "tablet-size-preview.py": [("app = QGuiApplication", "window"), ("quit_timer = QTimer()", "timers"),
                                ("try:", "first-show")],
-    "tablet-pie.sh": [("DIR=$(cd", "warp-then-open")],
     "tablet-pointer-warp.py": [("UI_DEV_CREATE, UI_DEV_DESTROY", "uinput-constants")],
     "tablet-pad-probe.py": [("BT_PEN_REGION_END", "quiet-reports")],
     "wacom_center.py": [("CONF = Path(", "paths")],

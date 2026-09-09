@@ -15,10 +15,9 @@ markers do not. `tests/check_map.py` keeps this file and the markers in step;
 |---|---|---|---|
 | `tablet-precision.sh` | the pad key's chord (a KWin global shortcut), the ring script, the hover daemon, Wacom Center | one run per call, ~150 ms | KWin D-Bus (`outputArea`), the runtime files, the overlay's pipe |
 | `tablet-overlay.py` + `.qml` | the toggle (the precision overlay, `--fifo`), the daemon (the ghost, `--waiting --follow`) | precision: ON to OFF; ghost: touch to lift | its pipe or its stdin |
-| `tablet-hover.py` | the autostart entry (install.sh) | always | every Wacom hidraw node, the pen's evdev node, the toggle (`where`, `suspend`, `resume`, `toggle` on a long press), the overlay pipe, the conf |
+| `tablet-hover.py` | the autostart entry (install.sh) | always | every Wacom hidraw node, the pen's evdev node, the toggle (`where`, `suspend`, `resume`, `toggle` on a long press), the overlay pipe, the conf + the `hover.ctl` reload pipe, one virtual device on `/dev/uinput` (the mouse onto the pen, then a key's press or touch chord) |
 | `tablet-precision-size.sh` | the ring's two chords | one run per tick | the conf (SCALE, RING_STEP), the relocate marker, the toggle (`resize`, mode on) or the size preview (mode off) |
 | `tablet-size-preview.py` (+ `tablet-overlay.qml`) | the ring script, mode off, when none is running | until 1.2 s after the last conf change, or at once when the mode comes on | the conf (mtime), the state file |
-| `tablet-pie.sh` → `tablet-pointer-warp.py` → `kando` | a pad key's chord | one run | `/dev/uinput`, KWin's device list |
 | `wacom_center.py` | the launcher entry | a window | the conf, `kcminputrc`, the toggle |
 | `tablet-pad-probe.py` | you, in a terminal | until Ctrl+C | hidraw |
 
@@ -34,7 +33,7 @@ Runtime files live in `$XDG_RUNTIME_DIR/tabprec/` (`$RD` below). The conf is
 | Thing | Written by | Read by | Content / meaning |
 |---|---|---|---|
 | `$RD/saved-area` | toggle ON | toggle OFF, `suspend`; the daemon, the ring script, the size preview (exists = precision ON) | the base mapping `FX FY FW FH` |
-| `$RD/area` | `apply_area` (ON, resize, move) | `resize` (its centre), the daemon's drag, `resume` | `X Y W H DIM SW SH FX FY FW FH` of the current area |
+| `$RD/area` | `apply_area` (ON, resize, move) | `resize` (its centre), the daemon's drag and its warp (the fractions), `resume` | `X Y W H DIM SW SH FX FY FW FH` of the current area |
 | `$RD/overlay.pid` | `apply_area` | `apply_area` (alive?), toggle OFF (kill) | pid of the precision overlay |
 | `$RD/overlay.fifo` | created by the overlay (`--fifo`, held O_RDWR); written by `apply_area` and the daemon | the overlay | lines `X Y W H [DIM]` (move), `waiting` / `solid` (the border); applied in order, under PIPE_BUF |
 | `$RD/relocate` | the daemon: touched at the hold, then at 30 Hz while dragging; removed on a cancel | the toggle: younger than 3 s = MOVE instead of OFF; the ring script: younger than 3 s = the tick does nothing | its mtime is the message; never deleted on a press |
@@ -46,8 +45,13 @@ Runtime files live in `$XDG_RUNTIME_DIR/tabprec/` (`$RD` below). The conf is
 | conf `HOLD` | Wacom Center | the daemon (re-read within 2 s) | seconds a resting finger waits before a drag; no floor (0 = at once), default 0.15 |
 | conf `LONG` | Wacom Center | the daemon (re-read within 2 s) | seconds a press that confirmed a drag stays down to leave the mode; 0 = never, default 0.7 |
 | conf `RING_STEP` | Wacom Center | the ring script | percentage points of screen width per ring tick; default 0.5 |
-| `kcminputrc` `[ButtonRebinds][TabletRing][<pad>][0]` `0=AxisKey,<up>,<down>,<threshold>` | Wacom Center (tick angle, direction), install.sh (600) | KWin | threshold = degrees per tick × 120; the ring reports 5° steps, so ≤ 600 = every step (72 ticks a turn) |
-| conf `HOVER_MASK` | the daemon (learned) | the daemon | the precision key's bit |
+| `kcminputrc` `[ButtonRebinds][TabletRing][<pad>][<mode 0–3>]` `0=AxisKey,<up>,<down>,<threshold>` | Wacom Center (Pad tab: any mode's chords; Precision tab: angle and direction, on the size pair's mode), install.sh (600) | KWin | threshold = degrees per tick × 120; the ring reports 5° steps, so ≤ 600 = every step (72 ticks a turn) |
+| conf `WARP` | you | the daemon (re-read within 2 s) | `0` = no mouse warp on a touch or press; anything else or absent = warp (default) |
+| conf `CHORD_<n>` | you | the daemon (re-read within 2 s) | chord (F-keys + modifiers) the daemon presses on its virtual device when pad key n goes down, released with it; key n = press-byte bit n-1, and the key stays UNBOUND in kcminputrc |
+| conf `HOVER_MASK` | Wacom Center (the Precision column) | the daemon | the precision key's bit; absent = the ghost and the drag are off |
+| conf `TOUCH_CHORD_<n>` | Wacom Center (the Touch box) | the daemon (on a poke) | chord held while a finger rests on key n (engages after its register, mirror release); bare modifiers allowed, never on the mask key |
+| conf `TOUCH_HOLD_<n>` | Wacom Center (the Touch register column) | the daemon (on a poke) | key n's touch register in seconds; absent = `HOLD`, the default register |
+| `$RD/hover.ctl` | Wacom Center (Apply, the delay row), a hand `echo reload` | the daemon (in its select loop) | any line = re-read the conf; deferred while a rectangle follows the pen |
 | conf `HOVER_REPORT`, `HOVER_BYTE`, `PRESS_BYTE`, `PRESS_MASK` (+ `_USB` / `_BT`) | you, for an unknown model (from the probe) | the daemon | report layout overrides |
 | KWin `outputArea` | the toggle only | — | the pen's mapping; the device's `size` gives the tablet's aspect |
 
@@ -67,9 +71,10 @@ the preview ghost (a finger resting on the key, mode off), the size preview
 dragged, mode on), which turns solid again on the press or the lift.
 
 Timings: ghost debounce 0.06 s, drag hold `HOLD` (no floor), long press
-`LONG`, pen poll 30 Hz, node and conf rescan 2 s, key-learn window 2 s,
-marker freshness 3 s, pipe write timeout 1 s, lock wait 5 s, size preview
-hold 1.2 s and fade 0.45 s, dash flow 0.3 s per period.
+`LONG`, a touch chord engages after its key's register, pen poll 30 Hz, node rescan 2 s
+(hardware only; the conf reloads on a `hover.ctl` poke), marker freshness
+3 s, pipe write timeout 1 s, lock wait 5 s, size preview hold 1.2 s and
+fade 0.45 s, dash flow 0.3 s per period.
 
 The long press: KWin fires the toggle on the key-down, so a press during a
 drag always lands the area (MOVE); if the key then stays down for `LONG`,
@@ -133,28 +138,37 @@ Root properties, set from Python: `px py pw ph` (the clear rectangle),
 - **chunk: `waiting-border`** — the same border as a dashed `Shape` path, 5 px on / 5 px off, `dashOffset` bound to `phase`; the path runs clockwise.
 - **chunk: `flow-animation`** — `phase` from 5 to 0 (one period) every 300 ms while waiting: a shrinking offset moves the dashes forward, clockwise.
 
-### `tablet-hover.py` — the ExpressKey daemon: ghost, key learning, the drag
+### `tablet-hover.py` — the ExpressKey daemon: ghost, chords, the drag
 Reads the pad's raw hidraw reports (the kernel drops the touch sense).
 Precision OFF: a finger resting on the precision key shows the ghost (the
 look of the mode in the waiting style), which follows the pen. Precision ON:
 a finger held for `HOLD` seconds starts a drag of the real overlay, waiting
 border on, with the pen mapped to the whole screen; a press moves the area
-there, a lift puts everything back. Learns the precision key from a single
-press followed by a toggle. Report layouts per product id, conf keys override.
+there, a lift puts everything back. The precision key = conf `HOVER_MASK`,
+written by Wacom Center's Precision column (none = ghost and drag off).
+Report layouts per product id, conf keys override. A finger landing on any
+key warps the mouse onto the pen (one virtual device kept for life; the
+press repeats it); a key with conf `CHORD_<n>` — Disabled in kcminputrc —
+gets its chord pressed by the daemon right after the warp on the same
+device (KWin processes the motion first, so a pie opens under the pen),
+and conf `TOUCH_CHORD_<n>` is held from the key's touch register
+(`TOUCH_HOLD_<n>`, `HOLD` the default) to the lift. The conf reloads on
+a `hover.ctl` poke, not by polling.
 - **chunk: `log`** — stderr line with the `tablet-hover:` prefix (the journal under autostart).
-- **chunk: `read_conf`** / **`conf_stamp`** / **`save_conf_key`** — the conf as a dict; its mtime; set one key keeping the rest.
+- **chunk: `read_conf`** — the conf as a dict, comments stripped.
 - **chunk: `as_int`** — int() that accepts 0x.. and returns a default.
-- **chunk: `hold_delay`** — the wait before anything moves: 0.06 s ghost debounce, or conf HOLD (no floor) with precision ON.
+- **chunk: `touch_delay`** / **`hold_delay`** — key n's touch register (`TOUCH_HOLD_<n>`, `HOLD` the default) before a chord or the drag; the ghost keeps its 0.06 s debounce.
 - **chunk: `long_delay`** — conf LONG: how long a press that confirmed a drag stays down before the mode goes off; 0 = never.
 - **chunk: `FAMILIES`** / **`MODELS`** — built-in report layouts per family and bus; product id → family.
-- **chunk: `layout_for`** — one node's layout: conf overrides over built-ins; mask None until learned.
+- **chunk: `layout_for`** — one node's layout: conf overrides over built-ins; mask None = no precision key.
 - **chunk: `wacom_nodes`** — every Wacom hidraw node with its bus and product id, from sysfs.
 - **chunk: `pen_open`** / **`pen_norm`** — the pen's evdev fd; its normalized position from EVIOCGABS.
 - **chunk: `toggle`** — runs `tablet-precision.sh MODE` (suspend / resume / toggle) and reports success.
 - **chunk: `Follower`** — the rectangle that follows the pen: `show` (ghost), `move` (drag, sends `waiting`), `follow` (tick), `hide` (cancel or confirm, sends `solid`).
-- **chunk: `mask_text`** — "not learned yet" or the hex mask, for the log.
-- **chunk: `watch`** — the loop: hidraw reports → touch, press, lift; the hold timer; the long-press timer (OFF through the toggle); learning; rescans; a conf edit is reloaded in place.
-- **chunk: `main`** — `--simulate`, or watch forever (sleeping while no tablet is connected).
+- **chunk: `Warper`** — the mouse onto the pen and the chords: `ensure` (one device, retried), `warp(mapped, why)`, `chord_down`/`chord_up` (press/touch tags, after the warp), `release_all`, `close`.
+- **chunk: `mask_text`** — "none" or the hex mask, for the log.
+- **chunk: `watch`** — the loop: reports → warp, then `CHORD_<n>` / `TOUCH_CHORD_<n>` (the mask key exempt); the hold, touch and long-press timers; the control-pipe reload; node rescans.
+- **chunk: `main`** — `--simulate`, or watch forever with one `Warper` (sleeping while no tablet is connected).
 
 ### `tablet-precision-size.sh` — one ring tick: SCALE ± RING_STEP points
 - **chunk: `drag-guard`** — a relocate marker under 3 s old (the area is being dragged): exit, nothing changes.
@@ -176,13 +190,20 @@ precision mode comes on.
 - **chunk: `timers`** — the quit, hold and poll timers.
 - **chunk: `first-show`** — the initial mtime, the first draw, the first hold.
 
-### `tablet-pie.sh` — a Kando pie under the pen
-- **chunk: `warp-then-open`** — pen position (`--mapped`, so precision mode does not throw the menu across the screen) → mouse warp → `kando --menu`; no position = the menu at the mouse.
-
 ### `tablet-pointer-warp.py` — move the mouse to X Y without root
-A short-lived virtual absolute mouse on `/dev/uinput`: waits until KWin lists
-it, sends one motion, holds 50 ms, removes it. Fractions of the axis range, so
-it lands on the same physical spot on a scaled display.
+A virtual absolute mouse on `/dev/uinput`: waits until KWin lists it, sends
+one motion, holds 50 ms, removes it (the CLI, for one-shot debugging).
+Fractions of the axis range, so it lands on the same physical spot on a
+scaled display. The daemon imports it and keeps one device for life
+(`create` / `warp` / `destroy`); that device also carries the chord
+alphabet (modifiers + F-keys), pressed after a warp so KWin orders the
+motion before the chord (`parse_chord` / `chord`).
+- **chunk: `chord-keys`** — the chord alphabet: kcminputrc key names → kernel codes, modifiers and F1–F24 only; `MODIFIER_ORDER` = KWin's emission order; `CHORD_KEYS` = what `create` registers.
+- **chunk: `parse_chord`** — chord text → codes: the modifiers in KWin's order, then the ONE non-modifier key; None on junk, modifier-only, or two keys.
+- **chunk: `chord`** — press or release the parsed codes, one frame per key, releases reversed; written after the warp's frames, so KWin processes the motion first.
+- **chunk: `create`** — the virtual mouse (`keys` adds the chord alphabet), returned once KWin lists its node: `(fd, event node)`; OSError = no `/dev/uinput`, RuntimeError = KWin never listed it.
+- **chunk: `destroy`** — removes the device and closes the fd.
+- **chunk: `warp`** — the pointer to a screen fraction: two frames, the first one unit off, since the kernel drops an ABS value equal to the current one.
 - **chunk: `trace`** — stderr tracing under DEBUG=1.
 - **chunk: `_IO`** / **`_IOW`** / **`_IOR`** — ioctl number encoding.
 - **chunk: `uinput-constants`** — the uinput ioctls, event types and the axis range.
@@ -198,14 +219,21 @@ it lands on the same physical spot on a scaled display.
 - **chunk: `main`** — reads every node, prints each changed byte with node, bus and report id.
 
 ### `wacom_center.py` — the settings window
-- **chunk: `paths`** — the conf path, the toggle path, and the launcher table (personal copy) or the KWin names (public copy).
+- **chunk: `paths`** — the conf and control-pipe paths, the launcher table (personal copy) or the KWin names (public copy), the amber and red constants, the STE column tooltips.
 - **chunk: `busget`** / **`detect_devices`** — KWin property reads; the pad name and the tablet aspect by capability. *(public copy only)*
-- **chunk: `read_conf`** / **`write_conf`** — SCALE, DIM, HOLD, LONG, RING_STEP with defaults; write them keeping every other line.
-- **chunk: `kread`** / **`kwrite`** — a pad key's chord in `kcminputrc [ButtonRebinds]`.
-- **chunk: `ring_read`** / **`ring_write`** — the ring binding (mode 1): the two chords and the tick angle; KWin's threshold = degrees × 120; reconfigures KWin.
+- **chunk: `read_conf`** / **`write_conf`** — the numeric conf keys with defaults; write SCALE, DIM, LONG, RING_STEP keeping every other line (HOLD is the Pad tab's).
+- **chunk: `save_conf_key`** / **`drop_conf_key`** / **`conf_value`** — one conf line set, removed, or read raw (`CHORD_<n>`); the rest kept.
+- **chunk: `poke_daemon`** — one `reload` line into `hover.ctl`: the daemon re-reads the conf at once; no pipe = nothing to do.
+- **chunk: `toggle_chord`** — the precision toggle's global shortcut from kglobalshortcutsrc; the documented default when missing.
+- **chunk: `chord_rules`** — `parse_chord` imported from the warp module beside this file; None = the pie validation is off.
+- **chunk: `kread`** / **`kwrite`** — a pad key's chord in `kcminputrc [ButtonRebinds]`; the literal `Disabled` swallows the key (what a conf `CHORD_<n>` key needs).
+- **chunk: `ring_read`** / **`ring_write`** — one ring mode's binding (groups 0–3): two chords + tick angle; both empty = unbound; threshold = degrees × 120.
+- **chunk: `precision_ring_mode`** — which ring mode carries the precision-size pair; (0, defaults) when none does.
 - **chunk: `set_launcher_shortcut`** — keeps the shortcut daemon in step with the two launcher keys. *(personal copy only)*
-- **chunk: `PrecisionTab`** — the size and dim sliders, the hold and long-press fields (seconds, from 0), the ring step, tick angle and direction swap, the toggle button; saves on change.
-- **chunk: `PadTab`** — one chord field per key, validation, the layout warning, apply.
+- **chunk: `PrecisionTab`** — the size and dim sliders, the long-press field, the ring step, tick angle and direction swap, the toggle button; ring writes go to the size pair's mode.
+- **chunk: `pad_icon`** / **`ring_icon`** — the key and ring pictures: the box with its dot/dash mark, the doughnut with mode n's light (7:30, clockwise).
+- **chunk: `draw_ants`** / **`AntsLineEdit`** / **`AntsCheckBox`** / **`AntsRadio`** — the flowing dashed outline: amber = a pie side's box, red = a field precision mode consumes.
+- **chunk: `PadTab`** — the pad table: key pictures, Touch + Press boxes, the per-key register (`TOUCH_HOLD_<n>`), the rings, two pie ticks per key, the round Precision tick, apply + poke.
 - **chunk: `main`** — the window, the tabs (`pad` on the command line opens the second), the two launcher buttons.
 
 ### `tests/` — the gates
@@ -222,6 +250,12 @@ what must not arm it). Every rig takes
 `<scratch dir> <script path>`. `add_markers.py <dir> [out dir]` puts a marker
 above every new def, function or mode (idempotent; block markers are listed
 inside it).
+
+### `uninstall.sh` — the reverse of the installer *(public copy only)*
+Stops the daemon, removes the scripts, the launcher entries and their
+shortcut config; settings, the pad-key bindings and the udev rule stay,
+with the paths and the one sudo line printed. Safe to re-run. No chunk
+markers: the numbered steps it echoes are the map.
 
 ### `install.sh` — the installer *(public copy only)*
 Five steps: the scripts into `~/.local/bin`, the `.desktop` launcher entries

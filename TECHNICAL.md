@@ -13,13 +13,14 @@ September 2026.
 | `tablet-precision.sh` | the toggle, and the only writer of the pen mapping. Modes: `toggle`, `resize`, `where`, `suspend`, `resume` |
 | `tablet-pen-pos.py` | the pen position on the screen, in pixels |
 | `tablet-overlay.py` + `tablet-overlay.qml` | the dim overlay. One drawing for every rectangle the toolkit shows |
-| `tablet-hover.py` | the ExpressKey daemon: the touch preview, the key learning, the area drag, the long press |
+| `tablet-hover.py` | the ExpressKey daemon: the touch preview, the touch chords, the pie chords, the area drag, the long press |
 | `tablet-precision-size.sh` | one ring tick |
 | `tablet-size-preview.py` | the size preview, with precision mode off |
-| `tablet-pie.sh` + `tablet-pointer-warp.py` | the pie menu under the pen |
+| `tablet-pointer-warp.py` | the virtual device: the warp and the chords (the daemon imports it) |
 | `wacom_center.py` | the settings window |
 | `tablet-pad-probe.py` | prints the touch and press bytes of an unknown tablet |
 | `install.sh` | the deploy: scripts, shortcuts, autostart, the ring binding |
+| `uninstall.sh` | the reverse: daemon stopped, scripts, entries and shortcuts removed; settings kept |
 
 No compiled code, no kernel module. One daemon (`tablet-hover.py`), started
 by an autostart entry. Everything else is one process per key press.
@@ -79,8 +80,8 @@ prints the pixel the pen cursor is really on. Without the flag the plain
 full-tablet stretch is printed, which is the space the cursor-stationary
 placement works in. The XWayland source already reports the mapped
 position (its valuators are the screen scaled into 0..262143), so
-`--mapped` leaves it alone. `tablet-pie.sh` is the one caller that uses
-the flag.
+`--mapped` leaves it alone. The daemon applies the same correction to its
+warps through the area file's fractions.
 
 ## The overlay
 
@@ -130,26 +131,57 @@ screen exits at once. libinput counts ring degrees counter-clockwise. The
 
 Kando asks KWin for the pointer and gets the mouse. KWin keeps a separate
 cursor for the pen. So a pie opened from a pad key lands where the mouse
-was last left. `tablet-pie.sh` reads the pen position (`--mapped`, so a pie
-opened in precision mode does not land at the matching spot of the whole
-screen), moves the mouse there with `tablet-pointer-warp.py`, then runs
-`kando --menu "<name>"`.
-Without a pen position (tablet asleep, no udev rule) it runs `kando --menu`
-at the mouse.
+was last left. The fix is to move the mouse onto the pen right before the
+pie opens; the daemon does both, in that order, on one device.
 
-`tablet-pointer-warp.py` creates a short-lived virtual absolute mouse on
-`/dev/uinput`, sends one motion as a fraction of the axis range, holds
-50 ms and removes it. About 150 ms, no root, no portal dialog. It needs
-write access to `/dev/uinput`. Kubuntu tags the node `uaccess` for the
-logged-in user. Elsewhere, add a udev rule:
+`tablet-hover.py` keeps one virtual device on `/dev/uinput` for its whole
+life (KWin lists it once, at start); the device carries both the absolute
+mouse and a small keyboard (the modifiers and F1–F24). Type the menu's
+shortcut into a key's Touch or Press box and tick that side in the Pie
+keys column: the tab stores the chord in the conf (`CHORD_<n>` for a
+press pie, `TOUCH_CHORD_<n>` for a touch pie; n = the key number, top to
+bottom) and sets the key to `Disabled` in kcminputrc — `Disabled`, not a
+deleted entry: KWin hands an unbound pad button to a tablet-aware app
+over the tablet-pad protocol. The ticked side's box wears the overlay's
+amber waiting outline, so a pie key is visible at a glance. A press pie
+opens on the press; a touch pie opens after the key's touch register and
+lift-selects through Kando's turbo mode. Either way the daemon warps the
+mouse onto the pen and then presses the chord, on that one device. The kernel,
+libinput and KWin all process one device's events in write order, so the
+warp is applied before the chord reaches Kando — deterministic, about a
+millisecond, nothing per menu to install. A pad key bound in `kcminputrc`
+races instead and loses: KWin synthesizes its chord inside its own
+handling of the pad button, Kando's KWin script reads the pointer within
+2 ms of the signal (measured with `busctl monitor`), and the daemon's
+warp — a userspace round trip from the same HID report — lands a few ms
+after that read, so the menu opened one press behind. The touch-sense warp
+(`warp (touch)` in the journal) stays as a best effort for keys
+`kcminputrc` still owns. The chord is held while the pad key is held, so
+Kando's turbo mode works; the release mirrors the key, and a vanished
+tablet or a daemon exit releases anything still down (the kernel emits
+key-ups when a device is destroyed). A chord is modifiers plus ONE F-key:
+letters resolve through the active layout, and a modifier-only chord would
+form the Meta-tap launcher gesture. Each warp and chord is a journal line
+(`warp (press): mouse to (x, y)`, `chord (key 2): Meta+Shift+F8 down`), so
+a landing can be checked against `tablet-pen-pos.py --mapped`. In
+precision mode the pen position goes through the area's fractions from the
+area file; during a drag the base mapping is back and the plain position
+is right. Without `/dev/uinput` or KWin the daemon says so in the journal
+and tries again every 30 s. `WARP=0` in the conf switches the warp off
+(chords still fire).
+
+`examples/kando-krita-menu.json` is a Kando menu file with a Krita menu
+to start from.
+
+`tablet-pointer-warp.py` on its own (the command line, for one-shot
+debugging) creates the virtual mouse, sends one motion as a fraction of
+the axis range, holds 50 ms and removes it. A warp sends two frames, the
+first one unit off: the kernel drops an ABS value equal to the axis's
+current one, so a second warp to the same spot would otherwise be lost.
+Everything here needs write access to `/dev/uinput`. Kubuntu tags the
+node `uaccess` for the logged-in user. Elsewhere, add a udev rule:
 
     KERNEL=="uinput", TAG+="uaccess"
-
-The menu name is the first argument. `install.sh` writes
-`tablet-pie.sh Krita` into
-`~/.local/share/applications/net.local.tabpie.desktop`. Edit the `Exec`
-line of that file to open another menu. `examples/kando-krita-menu.json` is
-a Kando menu file with a Krita menu.
 
 ## The ExpressKey touch preview and the area drag
 
@@ -183,15 +215,36 @@ per connection type. It prints each byte that changes, with the node, the
 bus and the report id. Put the values into `~/.config/tabprec.conf` as
 `HOVER_REPORT_USB`, `HOVER_BYTE_USB` and `PRESS_BYTE_USB`, and the same
 with `_BT`. `HOVER_MASK_USB` and `PRESS_MASK_USB` (and `_BT`) override the
-learned key. Only keys with a touch sensor can do this (Intuos Pro, Cintiq
-Pro, MobileStudio Pro). On other tablets the daemon idles.
+precision key per bus. Only keys with a touch sensor can do this (Intuos
+Pro, Cintiq Pro, MobileStudio Pro). On other tablets the daemon idles.
 
-### Learning the precision key
+### Defining the precision key
 
-The daemon learns which key is the precision key. It watches for a single
-key press followed within 2 s by a toggle of precision mode. The pressed
-key is the precision key. The daemon saves its bit to the conf as
-`HOVER_MASK`.
+The Precision column in Wacom Center's Pad buttons tab names the key. One
+key at most carries the tick. Apply writes that key's bit to the conf as
+`HOVER_MASK`, gives the key the toggle's global shortcut in `kcminputrc`,
+and removes the key's other chords. The row shows red flowing outlines:
+the mode consumes the Touch and Press fields, and the Pie tick has no
+effect there. No tick = no `HOVER_MASK` = the ghost and the drag are off.
+The daemon does not guess: if you bind the toggle outside Wacom Center,
+tick the key in the tab as well.
+
+### Touch chords
+
+`TOUCH_CHORD_<n>` in the conf holds a chord down while a finger rests on
+key n, and releases it when the finger lifts - a held Ctrl inverts the
+brush in Blender's sculpt mode. The chord engages after key n's touch
+register (`TOUCH_HOLD_<n>`, the Pad tab's per-key column; `HOLD` is the
+default when a key has none; 0 = at once). A press that
+comes sooner wins: that contact fires only the press action, and no touch
+chord until the finger has left the key. A press after the chord engaged
+keeps the chord held, so Ctrl+click combos work. Right before the chord
+engages the daemon warps the mouse onto the pen again, so a pie menu
+bound to a touch opens at the pen's current spot; with Kando's turbo
+mode, lift the finger on a slice to select it. Touch chords may be bare
+modifiers - but not Meta alone, whose synthetic press-and-release is the
+launcher tap. The precision key is exempt: its touch belongs to the ghost
+and the drag. Touch chords need pad keys with a touch sensor.
 
 ### The ghost and the drag
 
@@ -245,11 +298,11 @@ their timing.
 | What | Value |
 |---|---|
 | ghost debounce | 0.06 s |
-| drag hold | `HOLD`, no floor, default 0.15 s |
+| touch register (chords, the drag) | `TOUCH_HOLD_<n>`, else `HOLD`; no floor, default 0.15 s |
 | long press | `LONG`, default 0.7 s, 0 = never |
 | pen poll while following | 30 Hz |
-| conf and hidraw node rescan | 2 s |
-| key-learn window | 2 s |
+| hidraw node rescan (hardware only) | 2 s |
+| conf reload | on a `hover.ctl` poke, at once |
 | marker freshness | 3 s |
 | pipe write timeout | 1 s |
 | lock wait | 5 s |
@@ -259,30 +312,47 @@ their timing.
 ## Settings reference
 
 The conf is `~/.config/tabprec.conf`. Every writer keeps the lines it does
-not own. The daemon re-reads it within 2 s. The toggle reads it on every
-run.
+not own. The daemon re-reads it when a line arrives on its control pipe -
+Wacom Center pokes `$XDG_RUNTIME_DIR/tabprec/hover.ctl` on every Apply and
+delay change. After a hand edit, poke it yourself:
+
+    echo reload > "$XDG_RUNTIME_DIR/tabprec/hover.ctl"
+
+The toggle reads the conf on every run and needs no poke.
 
 | Key | Meaning | Default | Written by |
 |---|---|---|---|
 | `SCALE` | area width as a fraction of the screen width, 0.05 to 0.80 | 0.36 | Wacom Center, the ring |
 | `DIM` | dim strength outside the area, 0 to 0.8 | 0.10 | Wacom Center |
-| `HOLD` | seconds a resting finger waits before a drag, 0 = at once | 0.15 | Wacom Center |
+| `HOLD` | the default touch register: seconds a resting finger waits before its touch action when the key has no `TOUCH_HOLD_<n>`, 0 = at once | 0.15 | you (a hand edit; the tab writes per-key values) |
+| `TOUCH_HOLD_<n>` | key n's own touch register | `HOLD` | Wacom Center (the Touch register column) |
 | `LONG` | seconds a press that confirmed a drag stays down to leave the mode, 0 = never | 0.7 | Wacom Center |
 | `RING_STEP` | percentage points of screen width per ring tick | 0.5 | Wacom Center |
-| `HOVER_MASK` | the precision key's bit | learned | the daemon |
+| `HOVER_MASK` | the precision key's bit | none | Wacom Center (the Precision column) |
+| `CHORD_<n>` | the chord the daemon presses after the warp when pad key n goes down (a pie key; the key is `Disabled` in kcminputrc) | none | Wacom Center (a ticked Pie key) |
+| `TOUCH_CHORD_<n>` | the chord held while a finger rests on key n (see "Touch chords") | none | Wacom Center (the Touch box) |
+| `WARP` | `0` switches the mouse warp off; chords still fire | on | you |
 | `HOVER_REPORT_<BUS>`, `HOVER_BYTE_<BUS>`, `PRESS_BYTE_<BUS>`, `HOVER_MASK_<BUS>`, `PRESS_MASK_<BUS>` | report layout overrides for an unknown model, `<BUS>` = `USB` or `BT` | none | you, from the probe |
 
 The ring binding lives in `kcminputrc`, not in the conf (see "The ring").
 
-`install.sh` registers four global shortcuts and creates the launcher
+`install.sh` registers three global shortcuts and creates the launcher
 entries in `~/.local/share/applications/`:
 
 | Shortcut | Entry | Runs |
 |---|---|---|
 | `Meta+Shift+F12` | `net.local.tabprec-toggle.desktop` | `tablet-precision.sh` |
-| `Meta+Shift+F11` | `net.local.tabpie.desktop` | `tablet-pie.sh Krita` |
 | `Meta+Shift+F10` | `net.local.tabprec-bigger.desktop` | `tablet-precision-size.sh up` |
 | `Meta+Shift+F9` | `net.local.tabprec-smaller.desktop` | `tablet-precision-size.sh down` |
+
+To change one of these chords, open System Settings → Keyboard →
+Shortcuts, find the entry by its name ("Precision mode toggle",
+"Precision area bigger", "Precision area smaller"), and record a new
+chord there. The Precision column reads the toggle's current chord on
+every Apply — re-apply the Pad tab after the change. If you changed the
+two size chords, also retype them in their ring mode's boxes.
+`uninstall.sh` reverses the install; settings and the udev rule stay,
+with the removal lines printed.
 
 A command shortcut needs all three: `X-KDE-GlobalAccel-CommandShortcut=true`
 in the entry, `kbuildsycoca6`, and `doRegister` + `setForeignShortcut` on

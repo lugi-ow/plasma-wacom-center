@@ -30,8 +30,10 @@ touch-sensitive pad keys (Intuos Pro, Cintiq Pro, MobileStudio Pro).
   there. Keep the key pressed to leave precision mode.
 - **Pie menu under the pen.** A pad key opens a [Kando](https://kando.menu)
   pie menu at the pen, not where the mouse was left.
+- **Touch chords.** Rest a finger on a pad key and the key holds a chord
+  for you - rest for Ctrl while you sculpt in Blender, lift to release.
 - **Wacom Center.** A settings window for the area size, the dim strength,
-  the hold and long-press times, the ring, and the pad keys.
+  the times, the ring's four modes, and every pad key.
 
 Precision mode has a solid amber border. A preview has a dashed border that
 moves.
@@ -79,17 +81,13 @@ sudo apt install python3-pyqt6 python3-pyqt6.qtquick
    rule, so the scripts can read the pen position and the touch sense of
    the pad keys.
 
-3. In System Settings, open Drawing Tablet, then the Pad tab.
+3. Open Wacom Center from the application menu, then the Pad buttons tab.
 
-4. Press the pad key you want as the precision key.
+4. Tick the round Precision box for the pad key you want, then click
+   "Apply bindings". That key now toggles precision mode, shows the ghost,
+   and drags the area.
 
-5. Choose "Send keyboard key".
-
-6. Press `Meta+Shift+F12`.
-
-7. For the pie menu, bind a second pad key to `Meta+Shift+F11` the same way.
-
-8. Log out and log in again. This starts the touch preview and makes the
+5. Log out and log in again. This starts the touch preview and makes the
    shortcuts work.
 
 Bind pad keys to F-keys and modifiers only. A letter does not work while a
@@ -97,42 +95,57 @@ non-Latin keyboard layout is active.
 
 ## The precision key
 
-The precision key is the pad key bound to `Meta+Shift+F12`. On a Wacom
-Intuos Pro (2017 or later) the pad keys sense a finger that rests on them,
-before the press. Wacom calls these keys ExpressKeys. The touch preview and
-the area drag use that sense.
-
-There is nothing to set up. After the install, press the precision key
-once. From then on the toolkit knows which key it is.
+You pick the precision key yourself: in Wacom Center's Pad buttons tab,
+tick the round box in the Precision column for the key you want, then
+click "Apply bindings". That key now toggles precision mode. On a Wacom
+Intuos Pro (2017 or later) the pad keys sense a finger that rests on
+them, before the press — Wacom calls these keys ExpressKeys — and the
+toolkit uses that sense for the ghost and the area drag. The key's row
+shows red moving outlines: precision mode owns that key, and its Touch
+and Press fields do nothing else. Untick the box and the ghost and the
+drag switch off.
 
 | Precision mode | What you do | What happens |
 |---|---|---|
 | off | press the key | precision mode comes on, around the cursor |
 | off | rest a finger on the key | a ghost shows where the area will land, and follows the pen |
 | on | press the key at once | precision mode goes off |
-| on | rest a finger for the hold time, then press | the area moves to the pen |
+| on | rest a finger for the key's Touch register, then press | the area moves to the pen |
 | on | rest a finger, then lift it without a press | nothing changes |
 | on | rest a finger, press, and keep the key down for the long-press time | the area moves, then precision mode goes off |
 
-The hold time and the long-press time are the two time fields in Wacom
-Center. With the hold time at 0, every press is a move, and the long press
-is the way out of precision mode.
+The Touch register is the key's own time field in the Pad buttons tab;
+the long-press time is in the Precision tab. With the register at 0,
+every press is a move, and the long press is the way out of precision
+mode.
 
 ## Settings
 
 Open Wacom Center from the application menu, in the Settings category.
 The Precision tab has the area size (5 to 80 % of the screen width), the
-dim strength, the hold time, the long-press time, the ring step, the tick
-angle, and a switch for the ring direction. The Pad buttons tab sets the
-key chord each pad key sends.
+dim strength, the long-press time, the ring step, the tick angle, and a
+switch for the ring direction. The Pad buttons tab is the whole pad as a
+table: each key's Touch and Press shortcuts, its own Touch register, the
+ring's four modes, the Pie keys column (one tick per side), and the
+Precision column that names the precision key. Hover a column title for
+the explanation.
 
 ## Pie menu
 
 Plasma has no pie menus. [Kando](https://kando.menu) adds them, and it
 works on Plasma Wayland. `examples/kando-krita-menu.json` is a Kando menu
-file with a Krita menu: brush, transform, selection tools, and a canvas
-rotation reset. The pad key bound to `Meta+Shift+F11` opens the menu named
-`Krita` under the pen. `TECHNICAL.md` says how to open a different menu.
+file with a Krita menu to start from: brush, transform, selection tools,
+and a canvas rotation reset.
+
+For each menu, give it a shortcut in Kando's editor. Then open Wacom
+Center's Pad buttons tab, type the same shortcut for the pad key you
+want — in Press to open it with a press, or in Touch to open it when
+your finger rests on the key — and tick that side's box in the Pie keys
+column. The toolkit moves the mouse onto the pen and then presses the
+shortcut for you, in that order, so the menu opens under the pen every
+time. A touch pie even selects when you lift the finger on a slice. Use
+a shortcut made of F-keys and modifiers, and use each one once.
+`TECHNICAL.md` says how it works.
 
 ## Known limitations
 
@@ -144,11 +157,35 @@ rotation reset. The pad key bound to `Meta+Shift+F11` opens the menu named
 - After a Bluetooth reconnect, hover the pen over the tablet once before
   you turn precision mode on. Otherwise the area lands in the top-left
   corner.
-- The touch preview and the area drag need pad keys with a touch sensor
-  (Wacom Intuos Pro, Cintiq Pro, MobileStudio Pro). On other tablets the
-  toggle, the ring and the pie menu still work.
+- The touch preview, the touch chords and the area drag need pad keys with
+  a touch sensor (Wacom Intuos Pro, Cintiq Pro, MobileStudio Pro). On other
+  tablets the toggle, the ring and the pie menu still work.
 - A pen click does not move the focus to another window. This is a Plasma
   6.6 bug (KDE bug 498386), not something this project can fix.
+
+## Uninstall
+
+If you want the pad keys back to plain chords, clear them in Wacom
+Center first (untick the Pie and Precision boxes, set the chords you
+want, Apply). Then run, from the folder you cloned this repository
+into:
+
+```
+./uninstall.sh
+```
+
+It stops the daemon and removes what the install put on your system:
+
+- the scripts, from `~/.local/bin`
+- the launcher entries, from `~/.local/share/applications`
+- the autostart entry, from `~/.config/autostart`
+- their shortcut entries in KDE's shortcut config
+
+Your settings stay in `~/.config/tabprec.conf`; the script prints that
+path and the one `sudo` line that removes the permission rule from
+`/etc/udev/rules.d`. Log out and back in once to finish. If you deleted
+the cloned folder, clone it again for the script — or remove the files
+from the folders above by hand.
 
 ## For contributors and AI agents
 
