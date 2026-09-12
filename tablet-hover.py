@@ -61,6 +61,12 @@
 # hand edit, `echo reload > .../hover.ctl` does the same (a reload waits
 # until no rectangle follows the pen). Hardware still polls: the nodes
 # are rescanned every 2 s - the tablet announces nothing on its own.
+# Every node set it opens (a connect, a wake, a bus switch, its own start)
+# starts `tablet-precision.sh heal` in the background: with precision mode on,
+# the pen that turned up takes the area on record, and after a recent pause
+# the mode resumes where it was. The tablet GONE for GRACE seconds with the
+# mode on pauses it (`tablet-precision.sh pause`), so no rectangle is left
+# drawn on the screen with no tablet to switch it off.
 # Messages go to stderr (the journal under autostart).
 #
 # A finger landing on ANY pad key also WARPS THE MOUSE onto the pen (and the
@@ -104,6 +110,7 @@ import importlib.util
 import os
 import re
 import select
+import stat
 import struct
 import subprocess
 import sys
@@ -122,6 +129,7 @@ SHOW_DELAY = 0.06                    # touch sense must hold this long before th
 HOLD_DEFAULT = 0.15                  # ...and this long before a relocation (precision on); conf key HOLD, Wacom Center field
 LONG_DEFAULT = 0.7                   # a press that confirmed a drag, kept down this long, switches precision mode off; conf key LONG, 0 = off
 RESCAN = 2.0                        # seconds between checks for new/lost hidraw nodes (hardware only)
+GRACE = 10.0                        # seconds the tablet may be gone with precision mode on before the mode pauses: a cable swap reconnects inside it
 TICK = 0.03                          # poll period while a rectangle follows the pen or a press is being judged
 BUS = {"0003": "usb", "0005": "bt"}
 
@@ -280,13 +288,24 @@ def pen_norm(fd):
 
 
 # ── chunk: toggle
-def toggle(mode):
-    """Run tablet-precision.sh MODE (suspend / resume / toggle); False when it failed."""
+def toggle(mode, *extra):
+    """Run tablet-precision.sh MODE [ARGS] (suspend / resume / toggle / pause); False when it failed."""
     try:
-        return subprocess.run([str(DIR / "tablet-precision.sh"), mode], timeout=5,
+        return subprocess.run([str(DIR / "tablet-precision.sh"), mode, *extra], timeout=5,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+# ── chunk: heal
+def heal():
+    """Start `tablet-precision.sh heal` in the background, never waiting: the pen's mapping is put
+    right after a connect, a wake or a bus switch. Its line, when it acts, lands in this journal."""
+    try:
+        subprocess.Popen([str(DIR / "tablet-precision.sh"), "heal"], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, start_new_session=True)
+    except OSError as err:
+        log(f"heal not started: {err}")
 
 
 # ── chunk: Follower
@@ -554,6 +573,9 @@ def watch(conf, follower, warper=None):
         warper.ensure()
     nodes = wacom_nodes()
     try:
+        RD.mkdir(parents=True, exist_ok=True)   # the toggle makes this too, but the daemon starts first at a fresh login
+        if CTL.exists() and not stat.S_ISFIFO(CTL.stat().st_mode):
+            CTL.unlink()                        # a plain file left by a hand `echo reload >` is ALWAYS ready: select would spin
         os.mkfifo(CTL)
     except FileExistsError:
         pass
@@ -581,6 +603,7 @@ def watch(conf, follower, warper=None):
         if ctl is not None:
             os.close(ctl)
         return False
+    heal()                            # a tablet just appeared: a precision rectangle KWin kept for its pen is put right
     pending = {}                      # fd -> time the touch began; None once acted on
     held = set()                      # fds whose key was pressed: nothing more until the finger leaves it
     down = {}                         # fd -> last press-byte value
@@ -740,6 +763,43 @@ def watch(conf, follower, warper=None):
     return True
 
 
+# ── chunk: Absence
+class Absence:
+    """How long the tablet has been gone while precision mode is ON. Past GRACE the mode PAUSES
+    (tablet-precision.sh pause): the rectangle leaves the screen, and the area is kept for the conf's
+    RECONNECT seconds, so the tablet coming back resumes it (heal). Nothing is stranded either way,
+    because kcminputrc already names the base: this is about the rectangle left drawn on the screen."""
+
+    def __init__(self):
+        self.since = None                    # monotonic time the tablet was first seen gone with the mode on
+        self.wall = None                     # the same moment in epoch seconds, for the pause record
+
+    def reset(self):
+        self.since = self.wall = None
+
+    def check(self):
+        if not STATE.exists():               # the mode is off: nothing to pause
+            self.reset()
+            return
+        if self.since is None:
+            self.since, self.wall = time.monotonic(), int(time.time())
+            return
+        if time.monotonic() - self.since >= GRACE:
+            log(f"tablet gone {GRACE:.0f} s with precision mode on: pausing it")
+            toggle("pause", str(self.wall))
+            self.reset()
+
+
+# ── chunk: cycle
+def cycle(follower, warper, gone, rescan=None):
+    """One pass of the daemon: watch the tablet while it is here; while it is not, time its absence."""
+    if watch(read_conf(), follower, warper):
+        gone.reset()                         # it was here until just now
+    else:
+        gone.check()
+        time.sleep(RESCAN if rescan is None else rescan)   # tablet asleep or not yet connected: poll
+
+
 # ── chunk: main
 def main():
     follower = Follower()
@@ -754,9 +814,9 @@ def main():
         follower.hide()
         return
     warper = Warper()
+    gone = Absence()
     while True:
-        if not watch(read_conf(), follower, warper):
-            time.sleep(RESCAN)         # tablet asleep or not yet connected: poll
+        cycle(follower, warper, gone)
 
 
 if __name__ == "__main__":

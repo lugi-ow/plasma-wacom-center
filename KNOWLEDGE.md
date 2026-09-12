@@ -11,6 +11,55 @@ tablet tooling on Plasma Wayland, read this first.
 mode needs. Event numbers change on every Bluetooth reconnect: never cache
 them, find the device by its `tabletTool` / `tabletPad` property each run.
 
+**KWin keeps every mapping you give it.** Each write to `outputArea` also
+goes into `kcminputrc`, under
+`[Libinput][<vendor id>][<product id>][<device name>]`, and KWin loads it
+again when the device appears. Over USB and over Bluetooth the same tablet
+has two product ids, so KWin keeps two pens. A precision rectangle thus
+outlives an unplug, a switch to the USB cable and a logout. The pen then
+comes back on the rectangle while no state file says that the mode is on.
+The next toggle ON saves the rectangle as the base mapping, and every
+toggle OFF returns to it.
+
+This happened on 2026-09-10. Precision mode was on over Bluetooth when the
+user connected the cable, and the next toggle OFF ran on the USB pen. The
+Bluetooth pen then came back on the old rectangle.
+
+The cable is a red herring. Logging out while the mode is on strands the pen
+in exactly the same way, with one connection and no cable, and so does a
+crash or an uninstall. The real fault is a lifetime mismatch: the effect
+(`outputArea`) is permanent, and the only record that it was meant to be
+temporary lives in `$XDG_RUNTIME_DIR`, which dies with the session.
+
+So do not leave the effect behind. After every mapping write, write the
+**base** mapping back into `kcminputrc` straight away, with
+`kwriteconfig6 --notify` — delete the key when the base is the whole screen,
+because an absent key and `0,0,1,1` are the same to KWin — and then read it
+back to prove it landed. The precision rectangle then lives only in KWin's
+memory, and the file always names the mapping the pen must have with the
+mode off.
+
+Two things make this work, and both were measured on Plasma 6.6 rather than
+assumed. Writing the file does **not** end precision mode: KWin keeps the
+live mapping in memory and consults the file only when a device appears, so
+the pen stays in the rectangle. And KWin does not write its own copy back
+over yours — the value held for 90 seconds with the mode on.
+
+Keep the old repair path as a fallback for a KDE that stores the mapping
+somewhere else. If the read-back disagrees, record the rectangle in a file of
+your own and put the pen right when it next appears. On a healthy system that
+file is never written.
+
+**OFF must not need the device.** A toggle that looks its device up before it
+decides what to do cannot switch off once the device is gone, and a tablet
+switched off while precision mode is on is an ordinary evening, not an edge
+case. On 2026-09-12 the rectangle stayed on the screen after the tablet was
+switched off, and the pad key, the keyboard shortcut and Wacom Center all
+failed the same way, because all three ran the same lookup first. Ending the
+mode needs only its own state. Restoring the live mapping needs the device,
+but once the file already names the base, KWin does that by itself on the
+next connect.
+
 **Letter chords die under non-Latin layouts.** KWin's button-rebind injector
 resolves a chord's letter through the *currently active* keyboard layout
 (`keycodeFromKeysym` searches only that layout). With a Cyrillic layout
@@ -25,6 +74,9 @@ be in the service cache (`kbuildsycoca6` after creating it), and must be
 registered with the daemon (`doRegister` + `setForeignShortcut` on
 `org.kde.kglobalaccel`). Miss any of the three and the chord does nothing.
 After a relogin the daemon rebuilds everything from `kglobalshortcutsrc`.
+That relogin is not optional. A launcher registered during the session holds
+its key at once, but the key starts nothing until the next login (Plasma 6.6,
+measured 2026-09-12).
 
 **Ring bindings** live in `kcminputrc` as
 `[ButtonRebinds][TabletRing][<pad device name>][<mode>]` with

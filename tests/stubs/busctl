@@ -1,15 +1,34 @@
 #!/bin/bash
-# Stub busctl for tablet-precision.sh tests: answers the four get-property
-# calls with an Intuos Pro M shape and logs every call to $STUB_LOG.
+# Stub busctl for tablet-precision.sh tests: answers get-property (one or
+# several properties per call) with an Intuos Pro M shape and logs every
+# call to $STUB_LOG. Like KWin, it keeps outputArea per product when
+# $STUB_AREAS is set - one file per product, $STUB_PRODUCT (default 864 =
+# Bluetooth; 855 = USB) - so a pen that changes bus comes back mapped the
+# way it was left. Without $STUB_AREAS every read says 0 0 1 1.
+# $STUB_NO_PEN lists no pen at all (the tablet is gone).
 echo "busctl $*" >> "${STUB_LOG:-/dev/stderr}"
-if [ "$2" = "get-property" ]; then
-    case "${@: -1}" in
-        devicesSysNames) echo 'as 1 "event5"' ;;
-        name)            echo 's "Wacom Intuos Pro M Pen"' ;;
-        tabletTool)      echo 'b true' ;;
-        tabletPad)       echo 'b false' ;;
-        size)            echo '(dd) 224 148' ;;
-        outputArea)      echo '(dddd) 0 0 1 1' ;;
-    esac
+PRODUCT=${STUB_PRODUCT:-864}
+KEPT="${STUB_AREAS:+$STUB_AREAS/area-$PRODUCT}"
+if [ "$2" = "set-property" ] && [ "$6" = outputArea ] && [ -n "$KEPT" ]; then
+    mkdir -p "$STUB_AREAS" && echo "$8 $9 ${10} ${11}" > "$KEPT"
+elif [ "$2" = "get-property" ]; then
+    for prop in "${@:6}"; do
+        case "$prop" in
+            devicesSysNames) [ -n "${STUB_NO_PEN:-}" ] && echo 'as 0' || echo 'as 1 "event5"' ;;
+            name)            [ -n "${STUB_NO_PEN:-}" ] && echo 's "Virtual mouse"' || echo 's "Wacom Intuos Pro M Pen"' ;;
+            tabletTool)      [ -n "${STUB_NO_PEN:-}" ] && echo 'b false' || echo 'b true' ;;
+            tabletPad)       echo 'b false' ;;
+            size)            echo '(dd) 224 148' ;;
+            vendor)          echo 'u 1386' ;;
+            product)         echo "u $PRODUCT" ;;
+            outputArea)      if [ -n "$KEPT" ] && [ ! -f "$KEPT" ]; then   # this device has just appeared, like KWin it loads
+                                 mkdir -p "$STUB_AREAS"                     # the mapping kcminputrc saved for it
+                                 D=$(kreadconfig6 --file kcminputrc --group Libinput --group 1386 \
+                                     --group "$PRODUCT" --group "Wacom Intuos Pro M Pen" --key OutputArea 2>/dev/null)
+                                 echo "${D:-0,0,1,1}" | tr ',' ' ' > "$KEPT"
+                             fi
+                             echo "(dddd) $(cat "$KEPT" 2>/dev/null || echo 0 0 1 1)" ;;
+        esac
+    done
 fi
 exit 0

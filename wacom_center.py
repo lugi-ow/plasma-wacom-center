@@ -3,11 +3,11 @@
 # Part of plasma-wacom-center (MIT).
 #
 # Precision tab: area size (% of screen width, tablet-shaped), dim strength,
-#   the hold time of the area drag and the long-press time that leaves the
-#   mode (seconds, no floor), the ring step (points per tick), written to
-#   ~/.config/tabprec.conf, which tablet-precision.sh sources on every toggle
-#   and tablet-hover.py re-reads; the ring's tick angle and direction go into
-#   its kcminputrc [TabletRing] binding.
+#   the long-press time that leaves the mode (seconds, no floor), the
+#   reconnect time (seconds, 0 = never), the ring step (points per tick),
+#   written to ~/.config/tabprec.conf, which tablet-precision.sh sources on
+#   every toggle and tablet-hover.py re-reads; the ring's tick angle and
+#   direction go into its kcminputrc [TabletRing] binding.
 # Pad buttons tab: the pad as a table - each key pictured as printed on the
 #   pad (the dot and dash marks), a Touch and a Press box per key, the
 #   ring's four modes between keys 4 and 5, the Pie keys column and the
@@ -113,28 +113,33 @@ def detect_devices():
 
 # ── chunk: read_conf
 def read_conf():
-    values = {"SCALE": 0.36, "DIM": 0.10, "HOLD": 0.15, "LONG": 0.7, "RING_STEP": 0.5}
+    values = {"SCALE": 0.36, "DIM": 0.10, "HOLD": 0.15, "LONG": 0.7, "RING_STEP": 0.5, "RECONNECT": 60.0}
     try:
-        for line in CONF.read_text().splitlines():
-            key, _, val = line.partition("=")
-            if key.strip() in values:
-                values[key.strip()] = float(val.strip())
-    except (OSError, ValueError):
-        pass
+        lines = CONF.read_text().splitlines()
+    except OSError:
+        return values
+    for line in lines:
+        key, _, val = line.partition("=")
+        if key.strip() not in values:
+            continue
+        try:                                       # per line, and comments stripped like conf_value:
+            values[key.strip()] = float(val.split("#", 1)[0].strip())   # one bad line must not revert
+        except ValueError:                                              # every other setting to default
+            continue
     return values
 
 
 # ── chunk: write_conf
-def write_conf(scale, dim, long_press, ring_step):
-    """Update SCALE, DIM, LONG and RING_STEP in place; every other line
+def write_conf(scale, dim, long_press, ring_step, reconnect):
+    """Update SCALE, DIM, LONG, RING_STEP and RECONNECT in place; every other line
     (HOLD - the Pad tab's delay row - chords, comments) stays."""
     try:
         rest = [l for l in CONF.read_text().splitlines()
-                if l.split("=", 1)[0].strip() not in ("SCALE", "DIM", "LONG", "RING_STEP")]
+                if l.split("=", 1)[0].strip() not in ("SCALE", "DIM", "LONG", "RING_STEP", "RECONNECT")]
     except OSError:
         rest = []
     CONF.write_text("\n".join([f"SCALE={scale:.4f}", f"DIM={dim:.2f}",
-                               f"LONG={long_press:.2f}", f"RING_STEP={ring_step:.1f}"] + rest) + "\n")
+                               f"LONG={long_press:.2f}", f"RING_STEP={ring_step:.1f}", f"RECONNECT={int(reconnect)}"] + rest) + "\n")
 
 
 # ── chunk: save_conf_key
@@ -204,8 +209,10 @@ def toggle_chord():
     the Precision column writes onto the ticked key; the documented default
     when the entry is missing."""
     out = subprocess.run(
-        ["kreadconfig6", "--file", "kglobalshortcutsrc", "--group", TOGGLE_COMPONENT,
-         "--key", "_launch"], capture_output=True, text=True).stdout.strip()
+        ["kreadconfig6", "--file", "kglobalshortcutsrc", "--group", "services",
+         "--group", TOGGLE_COMPONENT,          # kglobalaccel nests every .desktop under [services]:
+         "--key", "_launch"],                  # a flat group always reads empty and silently falls back
+        capture_output=True, text=True).stdout.strip()
     seq = out.split(",", 1)[0].strip()
     return seq if seq and seq.lower() != "none" else TOGGLE_FALLBACK
 
@@ -330,6 +337,17 @@ class PrecisionTab(QWidget):
                                   "mode (0 = never):"))
         long_row.addWidget(self.long_press)
         long_row.addStretch()
+        self.reconnect = QSpinBox()                 # whole seconds, 0 = never; a day as the top is no cap in practice
+        self.reconnect.setRange(0, 86400)
+        self.reconnect.setSuffix(" s")
+        self.reconnect.setLocale(QLocale.c())
+        self.reconnect.setKeyboardTracking(False)   # save on Enter, focus-out or a step, not per keystroke
+        self.reconnect.setValue(int(conf["RECONNECT"]))
+        reconnect_row = QHBoxLayout()
+        reconnect_row.addWidget(QLabel("If the tablet disconnects, resume precision mode when it is "
+                                       "back within (0 = never):"))
+        reconnect_row.addWidget(self.reconnect)
+        reconnect_row.addStretch()
         self.ring_mode, (self.ring_up, self.ring_down, degrees) = precision_ring_mode(pad)
         self.ring_step = QDoubleSpinBox()
         self.ring_step.setRange(0.1, 50.0)
@@ -364,6 +382,7 @@ class PrecisionTab(QWidget):
         for w in (self.size_label, self.size, self.dim_label, self.dim):
             layout.addWidget(w)
         layout.addLayout(long_row)
+        layout.addLayout(reconnect_row)
         layout.addLayout(ring_row)
         layout.addLayout(tick_row)
         layout.addWidget(toggle)
@@ -372,6 +391,7 @@ class PrecisionTab(QWidget):
             slider.valueChanged.connect(self.update_labels)
             slider.sliderReleased.connect(self.save)
         self.long_press.valueChanged.connect(self.save)
+        self.reconnect.valueChanged.connect(self.save)
         self.ring_step.valueChanged.connect(self.save)
         self.ring_degrees.valueChanged.connect(self.apply_ring)
         self.ring_swap.toggled.connect(self.apply_ring)
@@ -412,7 +432,7 @@ class PrecisionTab(QWidget):
 
     def save(self):
         write_conf(self.size.value() / 100, self.dim.value() / 100,
-                   self.long_press.value(), self.ring_step.value())
+                   self.long_press.value(), self.ring_step.value(), self.reconnect.value())
         poke_daemon()                       # LONG matters to the daemon; it hears at once
 
 
@@ -628,6 +648,7 @@ class PadTab(QWidget):
         info.setToolTip(PIE_TIP)
         grid.addWidget(info, 1, 4, Qt.AlignmentFlag.AlignHCenter)
         self.touches, self.presses, self.regs = {}, {}, {}
+        self._saved_press = {}      # a row the Precision tick turned red: what its Press box said before
         self.tp, self.pp, self.prms, self.rings = {}, {}, {}, {}
         hold_default = read_conf()["HOLD"]
         for idx in range(8):
@@ -752,9 +773,13 @@ class PadTab(QWidget):
             press = self.presses[idx]
             press.setReadOnly(red)
             if red:
+                if idx not in self._saved_press:     # remember the user's own chord ONCE, before
+                    self._saved_press[idx] = press.text()   # the toggle chord covers it
                 press.setText(toggle_chord())
                 press.set_ants(True, RED)
             else:
+                if idx in self._saved_press:         # the tick moved or was cleared: give the chord back,
+                    press.setText(self._saved_press.pop(idx))   # or Apply would commit the toggle chord
                 press.set_ants(self.pp[idx].isChecked(), AMBER)
             self.tp[idx].set_ants(red, RED)
             self.pp[idx].set_ants(red, RED)
@@ -810,17 +835,20 @@ class PadTab(QWidget):
                         problems.append(f"Key {idx + 1}: the Press shortcut needs its Pie tick, "
                                         "or clear it")
                 continue
+            # isEmpty() is False for ANY non-empty text, so it never rejected anything; toString()
+            # is empty exactly for Qt's Key_unknown. A WARNING, never a refusal: a chord Qt cannot
+            # parse can still be what someone wants under another keyboard layout.
             if press and press.lower() != "disabled" and press not in MODIFIER_ONLY \
-                    and QKeySequence(press).isEmpty():
-                problems.append(f"Key {idx + 1}: '{press}' is not a valid chord")
-                continue
+                    and not QKeySequence(press).toString():
+                problems.append(f"Key {idx + 1}: '{press}' does not look like a valid key "
+                                "combination. It might not work.")
             kwrite(self.pad, idx, press)
             drop_conf_key(f"CHORD_{idx + 1}")
         for mode, (up, down) in self.rings.items():
             chords = (up.text().strip(), down.text().strip())
-            if any(t and t not in MODIFIER_ONLY and QKeySequence(t).isEmpty() for t in chords):
-                problems.append(f"Ring mode {mode + 1}: not a valid chord")
-                continue
+            if any(t and t not in MODIFIER_ONLY and not QKeySequence(t).toString() for t in chords):
+                problems.append(f"Ring mode {mode + 1}: that does not look like a valid key "
+                                "combination. It might not work.")
             kept = ring_read(self.pad, mode)
             ring_write(self.pad, chords[0], chords[1], kept[2] if kept else 5, mode)
         subprocess.run(["qdbus6", "org.kde.KWin", "/KWin",

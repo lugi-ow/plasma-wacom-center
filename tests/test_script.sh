@@ -1,7 +1,8 @@
 #!/bin/bash
 # Drives tablet-precision.sh through on / move / resize / suspend / resume /
-# off with stubbed busctl + notify-send, a fake pen reader and a fake overlay.
-# No KWin, no GUI.
+# off / heal with stubbed busctl + notify-send, a fake pen reader and a fake
+# overlay. The stub keeps outputArea per product, like KWin, so the pen
+# ledger is tested across a bus switch and a logout. No KWin, no GUI.
 # Usage: test_script.sh <scratch dir> <path to tablet-precision.sh>
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -11,11 +12,12 @@ rm -rf "$S"; mkdir -p "$S/bin" "$S/rd" "$S/conf"
 cp "$SRC" "$S/bin/tablet-precision.sh"
 cp "$HERE/fake/tablet-overlay.py" "$HERE/fake/tablet-pen-pos.py" "$S/bin/"
 chmod +x "$S/bin/"* "$HERE/stubs/"*
-export PATH="$HERE/stubs:$PATH" XDG_RUNTIME_DIR="$S/rd" XDG_CONFIG_HOME="$S/conf"
-export STUB_LOG="$S/busctl.log" FAKE_LOG="$S/overlay.log"
+export PATH="$HERE/stubs:$PATH" XDG_RUNTIME_DIR="$S/rd" XDG_CONFIG_HOME="$S/conf" XDG_STATE_HOME="$S/state"
+export STUB_LOG="$S/busctl.log" FAKE_LOG="$S/overlay.log" STUB_AREAS="$S/kwin"
 printf 'SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\n' > "$S/conf/tabprec.conf"
 T="$S/bin/tablet-precision.sh"
 RD="$S/rd/tabprec"
+LEDGERS="$S/state/tabprec"
 FAILS=0
 check() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; FAILS=$((FAILS + 1)); fi; }
 sets() { grep -c 'set-property' "$STUB_LOG"; }
@@ -100,7 +102,144 @@ check "6 toggle waited for the lock (>= 0.8 s)" '[ $(( (t1 - t0) / 1000000 )) -g
 PID3=$(cat "$RD/overlay.pid")
 t0=$(date +%s%N); "$T" toggle; t1=$(date +%s%N); sleep 0.4
 check "6 off again in under 2 s: the overlay did not hold the lock" '[ $(( (t1 - t0) / 1000000 )) -lt 2000 ] && [ ! -f "$RD/saved-area" ] && [ ! -d "/proc/$PID3" ]'
+
+# The invariant from here on: after every run that changes the mapping, kcminputrc names the mapping
+# the pen must have with precision mode OFF. KWin loads that file whenever a device appears, and the
+# stub does too, so no rectangle the toggle sets can outlive an unplug, a bus switch or a logout.
+# `kc <product>` reads the file. `appear <product>` makes that pen turn up fresh, which is what an
+# unplug, a cable swap or a logout does - the stub then seeds it from kcminputrc, exactly like KWin.
+kc()     { kreadconfig6 --file kcminputrc --group Libinput --group 1386 --group "${1:-864}" \
+                        --group "Wacom Intuos Pro M Pen" --key OutputArea 2>/dev/null; }
+appear() { rm -f "$STUB_AREAS/area-${1:-864}"
+           STUB_PRODUCT="${1:-864}" busctl --user get-property a b c outputArea >/dev/null; }
+
+# 7: the 2026-09-10 bug. ON over Bluetooth (product 864), the cable goes in while ON (855), OFF on the
+#    USB pen, Bluetooth back. This design PREVENTS it instead of repairing it afterwards.
+"$T" toggle; sleep 0.4
+R=$(cut -d' ' -f8-11 "$RD/area")
+check "7 on: the pen takes the rectangle, kcminputrc still names the whole screen" \
+    '[ "$(cat "$STUB_AREAS/area-864")" = "$R" ] && [ -z "$(kc 864)" ]'
+check "7 on: no ledger, because the write-back was proved" '[ ! -f "$LEDGERS/1386-864" ]'
+appear 855
+check "7 the cable goes in while ON: the USB pen turns up on the whole screen" \
+    '[ "$(cat "$STUB_AREAS/area-855")" = "0 0 1 1" ]'
+STUB_PRODUCT=855 "$T" toggle; sleep 0.4
+check "7 off on the USB pen: precision mode ends" '[ ! -f "$RD/saved-area" ]'
+appear 864
+check "7 Bluetooth back: on the whole screen, with no heal and no ledger" \
+    '[ "$(cat "$STUB_AREAS/area-864")" = "0 0 1 1" ] && [ ! -f "$LEDGERS/1386-864" ]'
+
+# 8: the next toggle ON after such a bus switch saves the whole screen as the base, never a rectangle.
+"$T" toggle; sleep 0.4
+STUB_PRODUCT=855 "$T" toggle; sleep 0.4
+appear 864
+"$T" toggle 2>/dev/null; sleep 0.4
+check "8 toggle ON after the bus switch saves 0 0 1 1 as the base" '[ "$(cat "$RD/saved-area")" = "0 0 1 1" ]'
+"$T" toggle; sleep 0.4
+check "8 off: 864 on the whole screen, kcminputrc clean" \
+    '[ "$(cat "$STUB_AREAS/area-864")" = "0 0 1 1" ] && [ -z "$(kc 864)" ]'
+
+# 9: a logout while ON. $RD dies with the session and KWin restarts, so both pens turn up fresh and
+#    read kcminputrc - which names the whole screen. Nothing has to repair anything.
+"$T" toggle; sleep 0.4
+kill "$(cat "$RD/overlay.pid")"; sleep 0.1; rm -rf "$RD"
+appear 864
+check "9 a logout while ON: the pen comes back on the whole screen" \
+    '[ "$(cat "$STUB_AREAS/area-864")" = "0 0 1 1" ] && [ ! -f "$LEDGERS/1386-864" ]'
+
+# 10: a base that is NOT the whole screen (a tablet area set in System Settings). The write-back must
+#     put THAT back, not the whole screen, or precision mode would silently widen the user's own area.
+kwriteconfig6 --file kcminputrc --group Libinput --group 1386 --group 864 \
+              --group "Wacom Intuos Pro M Pen" --key OutputArea "0,0,0.5,1"
+appear 864
+"$T" toggle; sleep 0.4
+check "10 a custom base: kcminputrc keeps it while the mode is on" '[ "$(kc 864)" = "0,0,0.5,1" ]'
+appear 864
+check "10 the pen comes back on the custom base, not the whole screen" \
+    '[ "$(cat "$STUB_AREAS/area-864")" = "0 0 0.5 1" ]'
+"$T" toggle 2>/dev/null; sleep 0.4           # off again: test 11 starts with the mode OFF
+kwriteconfig6 --file kcminputrc --group Libinput --group 1386 --group 864 \
+              --group "Wacom Intuos Pro M Pen" --key OutputArea --delete
+appear 864
+
+# 11: the write-back cannot be proved (no kwriteconfig6 on this machine). The old repair path is the
+#     fallback: a ledger is written, and heal puts the pen right when it comes back.
+#     kcminputrc must genuinely disagree with the base, or there is nothing for the write-back to fix.
+kwriteconfig6 --file kcminputrc --group Libinput --group 1386 --group 864 \
+              --group "Wacom Intuos Pro M Pen" --key OutputArea "0.5,0.5,0.2,0.2"
+echo "0 0 1 1" > "$STUB_AREAS/area-864"     # KWin's memory says the whole screen, the file says a rectangle
+NOKW="$S/nokw"; mkdir -p "$NOKW"
+printf '#!/bin/bash\nexit 127\n' > "$NOKW/kwriteconfig6"; chmod +x "$NOKW/kwriteconfig6"
+PATH="$NOKW:$PATH" "$T" toggle 2>/dev/null; sleep 0.4
+R=$(cut -d' ' -f8-11 "$RD/area")
+check "11 the write-back cannot be proved: a ledger is written instead" \
+    '[ "$(cat "$LEDGERS/1386-864")" = "0 0 1 1 $R" ]'
+kill "$(cat "$RD/overlay.pid")" 2>/dev/null; sleep 0.1; rm -rf "$RD"
+"$T" heal 2>/dev/null
+check "11 heal repairs from the ledger and spends it" \
+    '[ "$(cat "$STUB_AREAS/area-864")" = "0 0 1 1" ] && [ ! -f "$LEDGERS/1386-864" ]'
+kwriteconfig6 --file kcminputrc --group Libinput --group 1386 --group 864 \
+              --group "Wacom Intuos Pro M Pen" --key OutputArea --delete
+
+# 12: heal while ON re-maps a pen that has just turned up, so the mode survives a cable swap.
+"$T" toggle; sleep 0.4
+R=$(cut -d' ' -f8-11 "$RD/area")
+appear 855
+STUB_PRODUCT=855 "$T" heal 2>/dev/null
+check "12 heal while ON: the pen that turned up takes the area on record" '[ "$(cat "$STUB_AREAS/area-855")" = "$R" ]'
+check "12 heal while ON leaves no ledger" '[ ! -f "$LEDGERS/1386-855" ]'
+STUB_PRODUCT=855 "$T" toggle; sleep 0.4
+
+# 13: heal with no pen listed (the tablet left again): 2 s of retries, then exit 1 without a notice.
+t0=$(date +%s%N); STUB_NO_PEN=1 "$T" heal; rc=$?; t1=$(date +%s%N)
+check "13 heal without a pen: exit 1 after >= 1.8 s of retries" '[ "$rc" -eq 1 ] && [ $(( (t1 - t0) / 1000000 )) -ge 1800 ]'
 check "no notifications (no errors)"    '! grep -q notify-send "$STUB_LOG"'
+
+# 14: the tablet is switched off while precision mode is on (the 2026-09-12 hardware test). OFF must still
+#     end the mode and close the overlay: the keyboard shortcut and Wacom Center's button are then the
+#     only ways left, and kcminputrc already names the base, so there is nothing live to restore.
+appear 864                                  # test 12 ended OFF on the USB pen: the Bluetooth pen comes back fresh, on the base
+"$T" toggle; sleep 0.4
+opid=$(cat "$RD/overlay.pid")
+n=$(grep -c notify-send "$STUB_LOG")
+STUB_NO_PEN=1 "$T" toggle; rc=$?; sleep 0.4
+check "14 OFF with the tablet switched off: the mode ends" '[ "$rc" -eq 0 ] && [ ! -f "$RD/saved-area" ] && [ ! -f "$RD/area" ]'
+check "14 OFF with the tablet switched off: the overlay closes" '! kill -0 "$opid" 2>/dev/null && [ ! -f "$RD/overlay.pid" ]'
+check "14 OFF with the tablet switched off: no error notice" '[ "$(grep -c notify-send "$STUB_LOG")" -eq "$n" ]'
+STUB_NO_PEN=1 "$T" toggle 2>/dev/null; sleep 0.2
+check "14 ON with the tablet switched off still refuses, with one notice" '[ ! -f "$RD/saved-area" ] && [ "$(grep -c notify-send "$STUB_LOG")" -eq $((n + 1)) ]'
+
+# 15: the tablet gone with the mode on: the daemon pauses it after its grace. The overlay closes without a pen, and the
+#     tablet back within RECONNECT seconds resumes the SAME area - a new placement would use a pen that still reads
+#     0,0 after the reconnect and land in the corner. Later than RECONNECT, or RECONNECT=0, the pause is dropped.
+appear 864                                  # test 14 left the tablet switched off: it comes back on the base
+"$T" toggle; sleep 0.4
+A=$(cut -d' ' -f1-4 "$RD/area"); F=$(cut -d' ' -f8-11 "$RD/area"); opid=$(cat "$RD/overlay.pid")
+STUB_NO_PEN=1 "$T" pause "$(date +%s)"; sleep 0.4
+check "15 pause without a pen: the mode ends, the overlay closes" '[ ! -f "$RD/saved-area" ] && [ ! -f "$RD/area" ] && ! kill -0 "$opid" 2>/dev/null'
+check "15 pause keeps the base and the area for a reconnect" '[ -f "$RD/paused" ] && [ "$(sed -n 2p "$RD/paused")" = "0 0 1 1" ] && [ "$(sed -n 3p "$RD/paused" | cut -d" " -f1-4)" = "$A" ]'
+appear 864
+FAKE_PEN="2500 1400 2560 1440" "$T" heal 2>/dev/null; sleep 0.4
+check "15 the tablet back in time: resumed at the SAME area, not at the pen" '[ -f "$RD/saved-area" ] && [ "$(cut -d" " -f1-4 "$RD/area")" = "$A" ] && [ "$(cut -d" " -f8-11 "$RD/area")" = "$F" ]'
+check "15 resumed: the overlay is back and the pause record is spent" '[ -f "$RD/overlay.pid" ] && kill -0 "$(cat "$RD/overlay.pid")" 2>/dev/null && [ ! -f "$RD/paused" ]'
+check "15 resumed: kcminputrc still names the whole screen" '[ -z "$(kc 864)" ]'
+STUB_NO_PEN=1 "$T" pause "$(( $(date +%s) - 120 ))"; sleep 0.4
+appear 864
+"$T" heal 2>/dev/null; sleep 0.4
+check "15 the tablet back too late: the pause is dropped, the mode stays off" '[ ! -f "$RD/saved-area" ] && [ ! -f "$RD/paused" ]'
+"$T" toggle; sleep 0.4
+STUB_NO_PEN=1 "$T" pause "$(date +%s)"; sleep 0.4
+appear 864
+FAKE_PEN="2500 1400 2560 1440" "$T" toggle 2>/dev/null; sleep 0.4
+check "15 the key pressed after a reconnect resumes the pause, not a corner area" '[ -f "$RD/saved-area" ] && [ "$(cut -d" " -f1-4 "$RD/area")" = "$A" ]'
+"$T" toggle; sleep 0.4
+echo 'RECONNECT=0' >> "$S/conf/tabprec.conf"
+"$T" toggle; sleep 0.4
+STUB_NO_PEN=1 "$T" pause "$(date +%s)"; sleep 0.4
+appear 864
+"$T" heal 2>/dev/null; sleep 0.4
+check "15 RECONNECT=0: a pause never resumes" '[ ! -f "$RD/saved-area" ] && [ ! -f "$RD/paused" ]'
+sed -i '/^RECONNECT=/d' "$S/conf/tabprec.conf"
 
 echo "failures: $FAILS"
 [ "$FAILS" -eq 0 ]

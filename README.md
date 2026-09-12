@@ -119,12 +119,18 @@ the long-press time is in the Precision tab. With the register at 0,
 every press is a move, and the long press is the way out of precision
 mode.
 
+If the tablet disconnects while precision mode is on, precision mode
+switches off after 10 seconds, so the border does not stay on the screen.
+If the tablet connects again within the reconnect time (60 seconds, in the
+Precision tab), precision mode comes back in the same place. Set the
+reconnect time to 0 to keep precision mode off.
+
 ## Settings
 
 Open Wacom Center from the application menu, in the Settings category.
 The Precision tab has the area size (5 to 80 % of the screen width), the
-dim strength, the long-press time, the ring step, the tick angle, and a
-switch for the ring direction. The Pad buttons tab is the whole pad as a
+dim strength, the long-press time, the reconnect time, the ring step, the
+tick angle, and a switch for the ring direction. The Pad buttons tab is the whole pad as a
 table: each key's Touch and Press shortcuts, its own Touch register, the
 ring's four modes, the Pie keys column (one tick per side), and the
 Precision column that names the precision key. Hover a column title for
@@ -162,6 +168,60 @@ a shortcut made of F-keys and modifiers, and use each one once.
   tablets the toggle, the ring and the pie menu still work.
 - A pen click does not move the focus to another window. This is a Plasma
   6.6 bug (KDE bug 498386), not something this project can fix.
+
+## If the pen only reaches a small part of the screen
+
+Precision mode maps the pen to a small rectangle. KDE keeps that rectangle
+and uses it again each time the tablet connects. The rectangle stays if the
+daemon stops while precision mode is on. The rectangle also stays if you
+remove this software while precision mode is on.
+
+These steps give the pen the whole screen again. You do not need this
+software installed to do them.
+
+1. Switch the tablet off.
+2. Disconnect the cable.
+3. Open Konsole.
+4. Run this command:
+
+   ```bash
+   grep -A1 Libinput ~/.config/kcminputrc
+   ```
+
+   Lines like these appear. Your numbers and your tablet name can differ:
+
+   ```
+   [Libinput][1386][864][Wacom Intuos Pro M Pen]
+   OutputArea=0.37,0.28,0.26,0.17
+   ```
+
+   The three values in the square brackets are the maker number, the model
+   number and the tablet name. A tablet has one block for the cable and one
+   for Bluetooth, with different model numbers.
+
+5. For each block that has an `OutputArea` line, run this command. Put your
+   own maker number, model number and tablet name in it:
+
+   ```bash
+   kwriteconfig6 --file kcminputrc --group Libinput --group 1386 --group 864 --group 'Wacom Intuos Pro M Pen' --key OutputArea --delete
+   ```
+
+   Nothing appears.
+
+6. Run the command in step 4 again. No `OutputArea` line appears now.
+7. Remove the record this software keeps:
+
+   ```bash
+   rm -rf ~/.local/state/tabprec
+   ```
+
+8. Switch the tablet on.
+9. Move the pen to the four corners of the tablet. The cursor goes to the
+   four corners of the screen.
+
+Step 5 removes the mapping completely. An empty mapping and the full screen
+are the same thing to KDE. If you set your own tablet area in System Settings
+before, set it again there.
 
 ## Uninstall
 

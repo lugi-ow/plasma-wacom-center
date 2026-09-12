@@ -38,6 +38,65 @@ A run reads the pen position, computes the area, writes `outputArea`, then
 spawns or moves the overlay. About 150 ms. Toggle OFF restores the mapping
 saved at ON, not blindly the full screen.
 
+### Unplugged while on
+
+KWin writes each `outputArea` into `kcminputrc`, per vendor id, product id
+and device name, and loads it again when the device appears. Over USB and
+over Bluetooth the tablet has two product ids, so KWin keeps two pens. A
+rectangle set while the mode is on would therefore outlive an unplug, a
+switch to the other connection, a logout and a crash — while the only note
+saying the rectangle was temporary lives in `$XDG_RUNTIME_DIR` and dies with
+the session. One permanent effect, one temporary note. That mismatch, not
+the cable, is the bug.
+
+So the toggle does not leave the effect behind. Every mapping write goes
+through `map_area`, which sets `outputArea` in KWin and then writes the
+**base** mapping back into `kcminputrc` at once (`unpersist`), deleting the
+key when the base is the whole screen. It then reads the value back to prove
+the write landed. The precision rectangle exists only in KWin's memory and
+in `$XDG_RUNTIME_DIR/tabprec/`, both of which die with the session, so an
+unplug, a bus switch, a logout, a crash or an uninstall all leave the pen on
+its normal mapping with nothing to repair.
+
+Measured on Plasma 6.6 on 2026-09-12: with precision mode on, `kcminputrc`
+read `0,0,1,1` while KWin's live `outputArea` read the rectangle, for 90
+seconds, and the pen stayed inside the rectangle. Writing the file does not
+end the mode, and KWin does not write its own copy back over it.
+
+`heal` still runs whenever the daemon opens the tablet's nodes. With the mode
+on it maps the pen that turned up to the area on record, so a tablet that
+changes connection stays in precision mode. With the mode off there is
+normally nothing to do.
+
+The pen ledger, `~/.local/state/tabprec/<vendor>-<product>`, remains as a
+fallback only. `map_area` writes one when it cannot prove the write-back —
+no `kwriteconfig6`, or a KDE that stores the mapping somewhere else — and
+`heal` then repairs from it the old way and says so in the journal.
+
+### The tablet goes away while the mode is on
+
+Switched off, a flat battery, or the cable out with Bluetooth off: the tablet
+is gone and precision mode is still on. Two things make that safe.
+
+Toggle OFF does not need the tablet. Every mode used to look the pen up first
+and exit when there was none, so the OFF branch never ran and the overlay
+stayed on the screen with nothing able to close it — not the pad key, the
+keyboard shortcut, Wacom Center or the daemon. Found on the hardware on
+2026-09-12. OFF now ends the mode without a pen. Nothing live needs restoring,
+because `kcminputrc` already names the base and KWin loads it when the tablet
+returns.
+
+The daemon also ends the mode by itself. When the tablet has been gone for 10
+seconds with the mode on (`GRACE`), it runs `tablet-precision.sh pause`, which
+closes the overlay and keeps the area in `$XDG_RUNTIME_DIR/tabprec/paused`. If
+the tablet comes back within `RECONNECT` seconds (a conf key and a Precision
+tab field, default 60, 0 = never), `heal` resumes precision mode at the same
+area. It does not place a new area at the pen, because the pen reads `0,0`
+right after a reconnect and a new area would land in the corner. A press of
+the precision key inside the window resumes it too. After the window the
+record is dropped. The grace keeps a cable swap from blinking the border, and
+the record dies at logout, so a crash never leaves a pause behind.
+
 ### The placement rule
 
 <p align="center"><img src="docs/placement.svg" width="880" alt="The placement rule in three cases: pen at the centre, off-centre, and in a corner"></p>
@@ -372,8 +431,9 @@ The first line gives the pen position (evdev). The second gives the touch
 sense (hidraw). Without the rule, precision mode centres on the mouse and
 the daemon idles.
 
-Runtime files live in `$XDG_RUNTIME_DIR/tabprec/`. `PROJECT_MAP.md` lists
-them with their writers and readers.
+Runtime files live in `$XDG_RUNTIME_DIR/tabprec/`. The pen ledgers live in
+`~/.local/state/tabprec/`, because they must outlive a logout.
+`PROJECT_MAP.md` lists them with their writers and readers.
 
 ## Limitations, in detail
 
@@ -404,9 +464,9 @@ bash only: no Qt, no tablet, no KWin. Exit 0 = all green.
 |---|---|
 | `py_compile`, `bash -n` | every Python file compiles, every shell script parses |
 | `tests/check_map.py` | every chunk marker has a bullet in `PROJECT_MAP.md`, and every bullet names a marker |
-| `tests/test_script.sh` (36 checks) | the toggle: on, move, resize around the centre with the clamp, suspend, resume, off, the run lock. A stubbed `busctl`, a fake pen reader, a fake overlay |
-| `tests/test_size.sh` (19 checks) | the ring script: the step and its clamps, `RING_STEP` from the conf, resize only with the mode on, the preview only with it off, nothing while the marker is fresh |
-| `tests/test_hover.py` (36 checks) | the daemon: a named pipe plays the pad, a fake pen, fake overlays, a fake toggle. The ghost, the drag, `waiting` and `solid`, a conf edit mid-rest, `HOLD` 0, the long press and what must not arm it |
+| `tests/test_script.sh` (63 checks) | the toggle: on, move, resize around the centre with the clamp, suspend, resume, off, the run lock. The write-back: a bus switch and a logout while on leave the pen on the whole screen, a base that is not the whole screen is put back as itself, the ledger fallback when the write-back cannot be proved, OFF with the tablet switched off, and a pause that resumes at the same area within `RECONNECT` seconds. A stubbed `busctl` that keeps `outputArea` per product AND seeds a device that has just appeared from `kcminputrc`, the way KWin does |
+| `tests/test_size.sh` (22 checks) | the ring script: the step and its clamps, `RING_STEP` from the conf, resize only with the mode on, the preview only with it off, nothing while the marker is fresh, and 12 ticks at once stepping `SCALE` exactly 12 times without losing a conf line |
+| `tests/test_hover.py` (70 checks) | the daemon: a named pipe plays the pad, a fake pen, fake overlays, a fake toggle. The ghost, the drag, `waiting` and `solid`, a conf edit mid-rest, `HOLD` 0, the long press and what must not arm it, the heal that a node set starts, and the runtime dir and control pipe the daemon makes for itself at a fresh login, and the absence timer that pauses precision mode |
 
 Not part of the gate: `tests/add_markers.py` puts a chunk marker above every
 new def, function or mode (idempotent).

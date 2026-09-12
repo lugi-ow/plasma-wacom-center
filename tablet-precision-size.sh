@@ -14,11 +14,17 @@
 
 export LC_ALL=C.UTF-8
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/tabprec.conf"
+RD="${XDG_RUNTIME_DIR:-/tmp}/tabprec"
+mkdir -p "$RD"
+# ── chunk: tick-lock
+# One tick at a time over the conf. Its OWN lock, never the toggle's $RD/lock, because this script
+# CALLS the toggle. The conf is read AFTER it, so a tick queued behind another steps the newest
+# SCALE, and the read-modify-write below cannot interleave with another tick - two overlapping ticks
+# used to lose a step, and could leave a conf holding only SCALE and DIM.
+exec 8>"$RD/conf.lock"; flock -w 5 8 || exit 0   # exit 0: a tick that cannot get in must not spawn a preview either
 [ -f "$CONF" ] && . "$CONF"
 SCALE=${SCALE:-0.36}
 DIM=${DIM:-0.10}
-RD="${XDG_RUNTIME_DIR:-/tmp}/tabprec"
-mkdir -p "$RD"
 DIR=$(cd "$(dirname "$0")" && pwd)
 MARK="$RD/relocate"
 
@@ -36,7 +42,10 @@ SCALE=$(awk -v s="$SCALE" -v d="$STEP" 'BEGIN{
 # ── chunk: conf-write
 # rewrite SCALE/DIM in place and keep every other line (touch-preview keys)
 REST=$(grep -v -E '^[[:space:]]*(SCALE|DIM)=' "$CONF" 2>/dev/null)
-{ printf 'SCALE=%s\nDIM=%s\n' "$SCALE" "$DIM"; [ -n "$REST" ] && printf '%s\n' "$REST"; } > "$CONF"
+TMP="$CONF.tmp.$$"
+{ printf 'SCALE=%s\nDIM=%s\n' "$SCALE" "$DIM"; [ -n "$REST" ] && printf '%s\n' "$REST"; } > "$TMP" &&
+    mv -f "$TMP" "$CONF" || rm -f "$TMP"   # atomic: no crash and no full disk can leave half a conf
+exec 8>&-                                  # written: let the next tick in before the toggle runs
 
 # ── chunk: resize-or-preview
 if [ -f "$RD/saved-area" ]; then

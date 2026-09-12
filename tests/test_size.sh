@@ -70,5 +70,16 @@ check "7 RING_STEP=0.5: 0.34 -> 0.3350"       'grep -qx "SCALE=0.3350" "$CONF"'
 sed -i 's/^RING_STEP=.*/RING_STEP=junk/' "$CONF"; "$T" up; sleep 0.3
 check "7 RING_STEP=junk: the half-point default" 'grep -qx "SCALE=0.3400" "$CONF"'
 
+# 8: a fast spin. Every tick is its own process, so without a lock they read the same SCALE and
+#    write the same result: a turn loses a third to a half of its steps, and two truncating writers
+#    can leave a conf holding only SCALE and DIM. 12 ticks at once must step SCALE exactly 12 times
+#    and keep every other line.
+printf 'SCALE=0.2000\nDIM=0.10\nHOVER_MASK=0x80\nRING_STEP=0.5\nCHORD_2=Meta+Shift+F8\nTOUCH_CHORD_5=Shift\n' > "$CONF"
+for _ in $(seq 12); do "$T" up & done; wait; sleep 0.3
+check "8 12 ticks at once: 0.2000 -> 0.2600, not a lost step" 'grep -qx "SCALE=0.2600" "$CONF"'
+check "8 the other conf lines all survived the spin" \
+    'grep -qx "DIM=0.10" "$CONF" && grep -qx "HOVER_MASK=0x80" "$CONF" && grep -qx "CHORD_2=Meta+Shift+F8" "$CONF" && grep -qx "TOUCH_CHORD_5=Shift" "$CONF"'
+check "8 no temporary conf file left behind"  '[ -z "$(ls "$S/conf"/tabprec.conf.tmp.* 2>/dev/null)" ]'
+
 echo "failures: $FAILS"
 [ "$FAILS" -eq 0 ]

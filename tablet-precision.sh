@@ -2,7 +2,7 @@
 # tablet-precision.sh - drawing-tablet "precision mode" toggle for KDE Plasma 6
 # on Wayland. Part of plasma-wacom-center (MIT).
 #
-# Usage: tablet-precision.sh [toggle|resize|where|suspend|resume]   (default: toggle)
+# Usage: tablet-precision.sh [toggle|resize|where|suspend|resume|heal|pause]   (default: toggle)
 #
 # toggle ON:  maps the pen to a TABLET-SHAPED rectangle (width = SCALE of the
 #      screen, height follows the tablet's own aspect ratio, so there is no
@@ -30,6 +30,32 @@
 #      re-map the area on record - tablet-hover.py brackets a relocation with
 #      them, so the cursor roams the whole screen while the area is aimed and
 #      returns to the old area on a cancel (a confirm re-maps through toggle).
+# heal:   tablet-hover.py runs it whenever a tablet appears (a connect, a
+#      wake, a bus switch, its own start). ON: the pen that turned up takes
+#      the area on record, so the mode survives a cable swap. OFF: a recent
+#      pause resumes (see pause); otherwise nothing to do - see below.
+# pause WHEN: tablet-hover.py runs it when the tablet has been GONE for its
+#      grace (10 s) with the mode ON - switched off, a flat battery. It ends
+#      the mode here without a pen, so no rectangle stays drawn with no
+#      tablet, and keeps the area in $RD/paused. heal, or the key, within the
+#      conf's RECONNECT seconds of WHEN resumes it at the SAME area; later, or
+#      with RECONNECT=0, the record is dropped. $RD dies at logout, so a crash
+#      never leaves a pause behind.
+#
+# KWin writes every outputArea it is given straight into kcminputrc, under
+# [Libinput][vendor][product][name], and loads it again whenever that device
+# appears. Over USB and over Bluetooth the tablet is two devices there. A
+# precision rectangle would therefore outlive an unplug, a bus switch, a
+# logout and a crash, while the only note saying it was temporary lives in
+# $XDG_RUNTIME_DIR and dies with the session. So every RECTANGLE write goes
+# through map_area, which writes the BASE back to kcminputrc at once
+# (unpersist) and reads it back to prove it: the rectangle exists only in
+# KWin's memory, and the file always names the mapping the pen must have
+# with the mode OFF. Measured on Plasma 6.6, 2026-09-12: the write-back does
+# not disturb the live mapping, and the pen stays in the rectangle.
+#      The ledger, $XDG_STATE_HOME/tabprec/<vendor>-<product> (default
+#      ~/.local/state), is now only a fallback: map_area writes one when the
+#      write-back cannot be proved, and heal OFF repairs from it as before.
 #
 # The overlay is spawned once per ON with --fifo $RD/overlay.fifo and then
 # MOVED through that pipe on a resize or a move (no respawn, no flicker);
@@ -71,13 +97,21 @@ exec 9>"$RD/lock"; flock -w 5 9 || exit 1   # one run at a time: a long press ma
 [ -f "$CONF" ] && . "$CONF"   # read AFTER the lock: a ring tick queued behind another applies the newest SCALE, not the one it was born with
 SCALE=${SCALE:-0.36}
 DIM=${DIM:-0.10}
+RECONNECT=${RECONNECT:-60}   # seconds a paused mode waits for the tablet to come back; 0 = never resume
+case "$RECONNECT" in *[!0-9.]*) RECONNECT=60;; esac
 DIR=$(cd "$(dirname "$0")" && pwd)
 STATE="$RD/saved-area"
 FIFO="$RD/overlay.fifo"    # the live overlay reads "X Y W H DIM" lines from it
 AREA="$RD/area"            # "X Y W H DIM SW SH FX FY FW FH" of the current mapping (tablet-hover.py relocates from it)
 MARK="$RD/relocate"        # fresh while tablet-hover.py drags the overlay: the next press moves instead of switching off
 PEN_CACHE="$RD/pen"        # the pen's KWin sysname from the last walk over the device list: one D-Bus call confirms it
+PAUSED="$RD/paused"        # a pause: when the tablet went, the base, the area line (resumed within RECONNECT s)
+LEDGERS="${XDG_STATE_HOME:-$HOME/.local/state}/tabprec"   # one ledger per pen, "base, last rectangle": KWin keeps a rectangle across unplugs and logouts, $RD does not survive them
 pen=""
+LEDGER=""
+GV=""; GP=""; GN=""; GTRIED=""   # the pen's kcminputrc group path (maker, model, name), filled once by pen_group
+PEN_OPTIONAL=""                  # set for OFF: the tablet may be gone, and OFF must still end the mode
+TRIES=0
 
 # ── chunk: note
 note() { notify-send -a Tablet -i input-tablet -t 1800 "Precision mode" "$1" 2>/dev/null; }
@@ -89,7 +123,7 @@ kload() { qdbus6 $KW /Scripting $SCR.unloadScript "$2" >/dev/null 2>&1
 kunload() { qdbus6 $KW /Scripting $SCR.unloadScript "$1" >/dev/null 2>&1; }
 
 # ── chunk: find_pen
-find_pen() {  # the pen's KWin sysname into $pen: the cached one when KWin still calls it a tablet tool (one D-Bus call), else a walk over every device; exits 1 when there is none
+find_pen() {  # the pen's KWin sysname into $pen: the cached one when KWin still calls it a tablet tool (one D-Bus call), else a walk over every device; exits 1 when there is none (heal: after 2 s of retries, silently)
     [ -n "$pen" ] && return 0
     pen=$(cat "$PEN_CACHE" 2>/dev/null)
     if [ -n "$pen" ]; then
@@ -102,7 +136,11 @@ find_pen() {  # the pen's KWin sysname into $pen: the cached one when KWin still
         case "$tool" in *true*) pen=$n; break;; esac
     done
     if [ -z "$pen" ]; then
-        note "No tablet pen found (tablet asleep?)"
+        if [ "$MODE" = heal ] && [ "$TRIES" -lt 8 ]; then   # the daemon saw the tablet's node: KWin may list the pen a moment later
+            TRIES=$((TRIES + 1)); sleep 0.25; find_pen; return
+        fi
+        [ -n "$PEN_OPTIONAL" ] && return 1   # OFF with the tablet switched off: the caller ends the mode without it
+        [ "$MODE" = heal ] || note "No tablet pen found (tablet asleep?)"
         exit 1
     fi
     echo "$pen" > "$PEN_CACHE"
@@ -152,9 +190,67 @@ compute_area() {  # the area for the pen's CURRENT position (toggle ON, a move, 
     area_math pen "$1" "$2" "$3" "$4"
 }
 
+# ── chunk: pen_group
+pen_group() {  # the pen's kcminputrc group path into $GV $GP $GN: KWin keeps every mapping it is given under [Libinput][vendor][product][name]
+    [ -n "$GV" ] && return 0
+    [ -n "$GTRIED" ] && return 1        # asked once per run: never read KWin again after the mapping changed
+    GTRIED=1
+    set -- $(busctl --user get-property $KW $MGR/$pen $IF vendor product 2>/dev/null | awk '{ print $2 }')
+    GN=$(busctl --user get-property $KW $MGR/$pen $IF name 2>/dev/null | cut -d' ' -f2- | sed 's/^"//; s/"$//')
+    case "${1:-}${2:-}" in ""|*[!0-9]*) return 1;; esac   # not two plain numbers: never guess a group path
+    [ -n "$GN" ] || return 1
+    GV="$1"; GP="$2"
+    return 0
+}
+
+# ── chunk: ledger
+ledger() {  # the pen's ledger file into $LEDGER, named <vendor>-<product> like KWin's own group: only unpersist's failure path writes one
+    [ -n "$LEDGER" ] && return 0
+    pen_group && LEDGER="$LEDGERS/$GV-$GP" || LEDGER="$LEDGERS/pen"
+    return 0
+}
+
+# ── chunk: unpersist
+unpersist() {  # kcminputrc must name the mapping the pen has with precision mode OFF ($1..$4). KWin writes every outputArea it is
+               # given straight into that file and loads it again whenever the tablet appears, so the rectangle would otherwise
+               # outlive an unplug, a bus switch, a logout and a crash. Verified on Plasma 6.6: the live mapping stays in KWin's
+               # memory, so this does not leave precision mode.
+    WANT=$(echo "$*" | tr ' ' ',')
+    [ "$WANT" = "0,0,1,1" ] && WANT=""       # an absent key and 0,0,1,1 are the same to KWin: leave no group behind
+    pen_group || { echo "tablet-precision: no vendor, product and name from KWin - the OFF mapping stays unwritten" >&2; return 1; }
+    command -v kwriteconfig6 >/dev/null 2>&1 || { echo "tablet-precision: no kwriteconfig6 - the OFF mapping stays unwritten" >&2; return 1; }
+    if [ -z "$WANT" ]; then
+        kwriteconfig6 --notify --file kcminputrc --group Libinput --group "$GV" --group "$GP" --group "$GN" --key OutputArea --delete 2>/dev/null
+    else
+        kwriteconfig6 --notify --file kcminputrc --group Libinput --group "$GV" --group "$GP" --group "$GN" --key OutputArea "$WANT" 2>/dev/null
+    fi
+    BACK=$(kreadconfig6 --file kcminputrc --group Libinput --group "$GV" --group "$GP" --group "$GN" --key OutputArea 2>/dev/null)
+    [ "$BACK" = "$WANT" ] && return 0
+    echo "tablet-precision: kcminputrc says '$BACK' for $GV/$GP, wanted '${WANT:-none}' - an unplug or a logout now would keep the rectangle" >&2
+    return 1
+}
+
+# ── chunk: map_area
+map_area() {  # outputArea = $1..$4 in KWin's memory, then kcminputrc back to the OFF mapping. A ledger is written ONLY when that
+              # write-back cannot be proved, so the old repair path still exists on a KDE that changed under us.
+    pen_group                            # ask KWin for the group path BEFORE the mapping changes: every read stays ahead of the write
+    if [ -f "$STATE" ]; then BASE=$(cat "$STATE")
+    else BASE=$(busctl --user get-property $KW $MGR/$pen $IF outputArea 2>/dev/null | cut -d' ' -f2-)
+    fi
+    busctl --user set-property $KW $MGR/$pen $IF outputArea '(dddd)' "$1" "$2" "$3" "$4" || return 1
+    if unpersist ${BASE:-0 0 1 1}; then
+        ledger; rm -f "$LEDGER"              # the disk names the OFF mapping: there is nothing left to repair
+    else
+        ledger
+        { mkdir -p "$LEDGERS" && echo "${BASE:-0 0 1 1} $1 $2 $3 $4" > "$LEDGER"; } 2>/dev/null ||
+            echo "tablet-precision: cannot write $LEDGER either - switch precision mode off before you unplug" >&2
+    fi
+    return 0
+}
+
 # ── chunk: apply_area
 apply_area() {  # map the computed area (W H X Y FX FY FW FH SW SH), record it, then move the live overlay or (re)spawn it
-    busctl --user set-property $KW $MGR/$pen $IF outputArea '(dddd)' "$FX" "$FY" "$FW" "$FH" || { note "Mapping change failed"; return 1; }
+    map_area "$FX" "$FY" "$FW" "$FH" || { note "Mapping change failed"; return 1; }
     echo "$X $Y $W $H $DIM $SW $SH $FX $FY $FW $FH" > "$AREA"
     if [ -f "$RD/overlay.pid" ] && kill -0 "$(cat "$RD/overlay.pid")" 2>/dev/null && [ -p "$FIFO" ] &&
        timeout 1 sh -c 'echo "$1" > "$2"' _ "$X $Y $W $H $DIM" "$FIFO" 2>/dev/null; then
@@ -165,7 +261,53 @@ apply_area() {  # map the computed area (W H X Y FX FY FW FH SW SH), record it, 
     echo $! > "$RD/overlay.pid"
 }
 
-[ "$MODE" = resize ] || find_pen      # resize looks the pen up only when it has something to apply
+# ── chunk: remap
+remap() {  # the area on record onto the pen again (resume, heal while ON)
+    [ -f "$AREA" ] || return 0
+    set -- $(cat "$AREA")
+    if [ -z "${11:-}" ] && [ -n "${7:-}" ]; then     # an area file from before the fractions were recorded: compute them
+        set -- "$@" $(awk -v x="$1" -v y="$2" -v w="$3" -v h="$4" -v sw="$6" -v sh="$7" 'BEGIN{printf "%.6f %.6f %.6f %.6f", x/sw, y/sh, w/sw, h/sh}')
+    fi
+    [ -n "${11:-}" ] && map_area "$8" "$9" "${10}" "${11}"
+}
+
+# ── chunk: heal_off
+heal_off() {  # mode OFF: a pen back on the rectangle its ledger names (unplugged, on the other bus or logged out while ON) gets its base again; the ledger is spent
+    ledger
+    [ -f "$LEDGER" ] || return 0
+    set -- $(cat "$LEDGER")
+    LIVE=$(busctl --user get-property $KW $MGR/$pen $IF outputArea 2>/dev/null | cut -d' ' -f2-)
+    [ -n "$LIVE" ] || return 1                       # no answer from KWin: the ledger stays for the next try
+    if awk -v a="$LIVE" -v b="$5 $6 $7 $8" 'BEGIN{ if (split(a, x, " ") != 4 || split(b, y, " ") != 4) exit 1
+            for (i = 1; i <= 4; i++) if (x[i] - y[i] > 0.0005 || y[i] - x[i] > 0.0005) exit 1 }'; then
+        busctl --user set-property $KW $MGR/$pen $IF outputArea '(dddd)' "$1" "$2" "$3" "$4" || return 1
+        echo "tablet-precision: $pen came back mapped to $5 $6 $7 $8 by precision mode - base $1 $2 $3 $4 restored" >&2
+    fi
+    rm -f "$LEDGER"                                  # healed, or the pen was mapped by someone else since: theirs stays
+}
+
+# ── chunk: unpause
+unpause() {  # a pause younger than RECONNECT seconds comes back at the SAME area: after a reconnect the pen reads 0,0 until it
+             # hovers, so a new placement would land in the corner. An older pause, or RECONNECT=0, is dropped. Always 0
+    [ -f "$PAUSED" ] || return 0
+    GONE=$(sed -n 1p "$PAUSED"); BASEL=$(sed -n 2p "$PAUSED"); AREAL=$(sed -n 3p "$PAUSED")
+    rm -f "$PAUSED"
+    awk -v now="$(date +%s)" -v gone="$GONE" -v w="$RECONNECT" 'BEGIN { if (gone !~ /^[0-9]+$/ || w + 0 <= 0 || now - gone > w + 0) exit 1 }' || return 0
+    set -- $AREAL
+    { [ -n "${11:-}" ] && [ -n "$BASEL" ]; } || return 0
+    echo "$BASEL" > "$STATE"
+    X=$1 Y=$2 W=$3 H=$4 SW=$6 SH=$7 FX=$8 FY=$9 FW=${10} FH=${11}
+    apply_area || { rm -f "$STATE"; return 0; }
+    echo "tablet-precision: the tablet came back within $RECONNECT s - precision mode resumed" >&2
+    return 0
+}
+
+# OFF must work with the tablet gone: switched off, a flat battery, the cable out with Bluetooth off.
+# Otherwise find_pen exits first, the OFF branch never runs and the overlay stays on the screen with
+# nothing able to close it - the pad key, the keyboard shortcut, Wacom Center and the daemon all come
+# through here. Found on the hardware 2026-09-12.
+[ "$MODE" = toggle ] && [ -f "$STATE" ] && PEN_OPTIONAL=1
+[ "$MODE" = resize ] || [ "$MODE" = pause ] || find_pen   # resize looks the pen up only when it has something to apply; pause never does
 case "$MODE" in
 # ── chunk: resize
 resize)    # while ON: the conf's SCALE around the area's own centre (the pen's position only when there is no area on record); a queued tick whose width is already on screen does nothing
@@ -195,27 +337,52 @@ suspend)   # while ON: the base mapping for the moment, precision mode stays on 
     ;;
 # ── chunk: resume
 resume)    # while ON: the area on record again (the relocation was cancelled)
-    if [ -f "$STATE" ] && [ -f "$AREA" ]; then
-        set -- $(cat "$AREA")
-        if [ -z "${11:-}" ] && [ -n "${7:-}" ]; then     # an area file from before the fractions were recorded: compute them
-            set -- "$@" $(awk -v x="$1" -v y="$2" -v w="$3" -v h="$4" -v sw="$6" -v sh="$7" 'BEGIN{printf "%.6f %.6f %.6f %.6f", x/sw, y/sh, w/sw, h/sh}')
+    if [ -f "$STATE" ]; then
+        remap
+    fi
+    ;;
+# ── chunk: pause
+pause)     # the tablet gone past the daemon's grace with the mode ON ($2 = when it went): end the mode without a pen, keep the area for RECONNECT s
+    if [ -f "$STATE" ]; then
+        { echo "${2:-$(date +%s)}"; cat "$STATE"; cat "$AREA" 2>/dev/null; } > "$PAUSED"
+        rm -f "$STATE" "$AREA" "$MARK"
+        if [ -f "$RD/overlay.pid" ]; then
+            kill "$(cat "$RD/overlay.pid")" 2>/dev/null
+            rm -f "$RD/overlay.pid"
         fi
-        [ -n "${11:-}" ] && busctl --user set-property $KW $MGR/$pen $IF outputArea '(dddd)' "$8" "$9" "${10}" "${11}"
+    fi
+    ;;
+# ── chunk: heal
+heal)      # a tablet appeared (tablet-hover.py, in the background): ON = the pen takes the area on record (a wake, or the other bus); OFF = a recent pause resumes, else heal_off
+    if [ -f "$STATE" ]; then
+        remap
+    else
+        unpause
+        [ -f "$STATE" ] || heal_off
     fi
     ;;
 # ── chunk: toggle
 *)
-    if [ ! -f "$STATE" ]; then
+    if [ ! -f "$STATE" ] && unpause && [ -f "$STATE" ]; then
+        :                        # a recent pause resumed where it was: that was this press's whole job
+    elif [ ! -f "$STATE" ]; then
+        heal_off                 # a rectangle left by an unplug or a logout while ON is no base to save
         CUR=$(busctl --user get-property $KW $MGR/$pen $IF outputArea | cut -d' ' -f2-)
         if compute_area && apply_area; then
             echo "$CUR" > "$STATE"
         fi
     elif [ -f "$MARK" ] && [ $(( $(date +%s) - $(stat -c %Y "$MARK" 2>/dev/null || echo 0) )) -le 3 ]; then
+        [ -n "$pen" ] || { note "No tablet pen found (tablet asleep?)"; exit 1; }   # a MOVE needs the pen
         rm -f "$MARK"            # relocation confirmed: re-map at the pen, the saved base mapping stays
         compute_area && apply_area
     else
-        set -- $(cat "$STATE")
-        busctl --user set-property $KW $MGR/$pen $IF outputArea '(dddd)' "${1:-0}" "${2:-0}" "${3:-1}" "${4:-1}"
+        if [ -n "$pen" ]; then   # the tablet is here: its live mapping goes back to the base
+            ledger
+            set -- $(cat "$STATE")
+            busctl --user set-property $KW $MGR/$pen $IF outputArea '(dddd)' "${1:-0}" "${2:-0}" "${3:-1}" "${4:-1}" &&
+                rm -f "$LEDGER"  # the pen is on its base again: nothing left to heal
+        fi                       # no pen: nothing live to restore. kcminputrc already names the base (unpersist),
+                                 # KWin loads it when the tablet returns, and a fallback ledger stays for heal
         rm -f "$STATE" "$AREA" "$MARK"
         if [ -f "$RD/overlay.pid" ]; then
             kill "$(cat "$RD/overlay.pid")" 2>/dev/null

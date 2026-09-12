@@ -18,7 +18,7 @@ SCRATCH = Path(sys.argv[1]) / "hover-test"
 SRC = Path(sys.argv[2])
 shutil.rmtree(SCRATCH, ignore_errors=True)
 RD, CONFD, FAKE = SCRATCH / "rd", SCRATCH / "conf", SCRATCH / "fake"
-for d in (RD / "tabprec", CONFD, FAKE):
+for d in (RD, CONFD, FAKE):           # NOT RD/tabprec: the daemon must make its own (check A0)
     d.mkdir(parents=True)
 os.environ["XDG_RUNTIME_DIR"] = str(RD)
 os.environ["XDG_CONFIG_HOME"] = str(CONFD)
@@ -41,6 +41,23 @@ shutil.copy(SRC.parent / "tablet-pointer-warp.py", FAKE / "tablet-pointer-warp.p
 for f in FAKE.iterdir():
     f.chmod(0o755)
 hover.DIR = FAKE
+
+# A0, measured here because it must happen before anything else makes the runtime dir:
+# at a fresh login nothing has run the toggle, so the daemon has to make $XDG_RUNTIME_DIR/tabprec
+# itself or its control pipe never exists and every conf reload is silently dead for the session.
+# watch() with no nodes returns as soon as it has made the pipe, so it is a safe probe.
+hover.wacom_nodes = lambda: []
+hover.watch(hover.read_conf(), None, None)
+FRESH_LOGIN_PIPE = hover.CTL.is_fifo()
+hover.RD.mkdir(parents=True, exist_ok=True)   # the second probe needs the dir whatever the first one found
+if hover.CTL.exists():
+    hover.CTL.unlink()
+hover.CTL.write_text("what a hand `echo reload > hover.ctl` leaves behind\n")
+hover.watch(hover.read_conf(), None, None)
+STALE_FILE_REPLACED = hover.CTL.is_fifo()   # a plain file is ALWAYS ready: select would spin on it forever
+if not STALE_FILE_REPLACED:
+    hover.CTL.unlink()                        # let the rest of the rig run, so both probes report as checks
+    os.mkfifo(hover.CTL)
 
 PEN = [(0.5, 0.5)]
 hover.pen_open = lambda: os.open("/dev/null", os.O_RDONLY)
@@ -107,9 +124,9 @@ follower = hover.Follower()
 
 
 def daemon():
+    gone = hover.Absence()
     while True:
-        if not hover.watch(hover.read_conf(), follower, FakeWarper()):
-            time.sleep(0.2)
+        hover.cycle(follower, FakeWarper(), gone, rescan=0.2)   # the daemon's own loop body, so the rig runs what main runs
 
 
 threading.Thread(target=daemon, daemon=True).start()
@@ -147,6 +164,13 @@ def check(name, cond):
 STATE, AREA, MARK = hover.STATE, hover.AREA, hover.MARK
 HOME = "909 475 742 490"
 ghost = lambda: GHOST_LOG.read_text() if GHOST_LOG.exists() else ""
+
+# --- A0: the daemon makes its own runtime dir and control pipe (probed before the rig made either) ---
+check("A0 fresh login: the daemon makes its own runtime dir and control pipe", FRESH_LOGIN_PIPE)
+check("A0 a plain file at hover.ctl is replaced by a pipe", STALE_FILE_REPLACED)
+
+# --- S: the node set opened: the daemon starts the toggle's heal, in the background ---
+check("S the pad node opened: heal started once", ghost().count("CALL heal") == 1)
 
 # --- A: precision OFF: the ghost, in the waiting look of the mode itself ---
 report(touch=0x80)
@@ -281,7 +305,8 @@ AREA.write_text("909 475 742 490 0.10 2560 1440 0.355078 0.329861 0.289844 0.340
 PEN[0] = (0.5, 0.5)
 report(touch=0x80)
 time.sleep(0.35)
-check("B nothing 0.35 s into the touch (hold is 0.6)", not MARK.exists() and not lines and "CALL" not in ghost())
+check("B nothing 0.35 s into the touch (hold is 0.6)", not MARK.exists() and not lines
+      and ghost().count("CALL") == ghost().count("CALL heal"))
 time.sleep(0.6)
 check("B marker fresh after the hold", MARK.exists() and time.time() - MARK.stat().st_mtime < 0.5)
 check("B waiting border first, then the overlay at the aim: 909 475 742 490", lines == ["waiting", HOME])
@@ -453,6 +478,34 @@ time.sleep(0.8)
 check("F no overlay: no marker", not MARK.exists())
 report(touch=0)
 time.sleep(0.2)
+
+# --- P: the tablet gone with precision mode on pauses the mode past GRACE. A second copy of the module,
+#        so the daemon thread this rig is running is not touched ---
+spec_p = importlib.util.spec_from_file_location("hover_p", SRC)
+hp = importlib.util.module_from_spec(spec_p)
+spec_p.loader.exec_module(hp)
+hp.GRACE = 0.3
+calls = []
+hp.toggle = lambda mode, *extra: calls.append((mode,) + extra) or True
+STATE.write_text("0 0 1 1" + chr(10))
+g = hp.Absence()
+g.check(); time.sleep(0.1); g.check()
+check("P gone for less than GRACE: no pause", calls == [])
+time.sleep(0.3); g.check()
+check("P gone past GRACE with the mode on: paused, with the moment it went",
+      len(calls) == 1 and calls[0][0] == "pause" and calls[0][1].isdigit())
+calls.clear(); STATE.unlink()
+g.check(); time.sleep(0.4); g.check()
+check("P gone past GRACE with the mode off: nothing to pause", calls == [])
+STATE.write_text("0 0 1 1" + chr(10))
+hp.watch = lambda *a: False
+hp.cycle(None, None, g, rescan=0); time.sleep(0.4); hp.cycle(None, None, g, rescan=0)
+check("P the daemon loop times the absence and pauses", len(calls) == 1 and calls[0][0] == "pause")
+calls.clear(); g.check()
+hp.watch = lambda *a: True
+hp.cycle(None, None, g, rescan=0)
+check("P the tablet back resets the timer", g.since is None and calls == [])
+STATE.unlink()
 
 print(f"failures: {fails}")
 os.close(writer)
