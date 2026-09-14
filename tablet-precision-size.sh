@@ -43,8 +43,9 @@ SCALE=$(awk -v s="$SCALE" -v d="$STEP" 'BEGIN{
 # rewrite SCALE/DIM in place and keep every other line (touch-preview keys)
 REST=$(grep -v -E '^[[:space:]]*(SCALE|DIM)=' "$CONF" 2>/dev/null)
 TMP="$CONF.tmp.$$"
-{ printf 'SCALE=%s\nDIM=%s\n' "$SCALE" "$DIM"; [ -n "$REST" ] && printf '%s\n' "$REST"; } > "$TMP" &&
-    mv -f "$TMP" "$CONF" || rm -f "$TMP"   # atomic: no crash and no full disk can leave half a conf
+{ printf 'SCALE=%s\nDIM=%s\n' "$SCALE" "$DIM"; [ -n "$REST" ] && printf '%s\n' "$REST"; true; } > "$TMP" &&
+    mv -f "$TMP" "$CONF" || rm -f "$TMP"   # atomic: no crash and no full disk can leave half a conf; `true`:
+    # REST empty makes the `&&` false, which without this would fail the WHOLE group and skip the write
 exec 8>&-                                  # written: let the next tick in before the toggle runs
 
 # ── chunk: resize-or-preview

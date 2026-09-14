@@ -272,8 +272,12 @@ def pen_open():
 
 # ── chunk: pen_norm
 def pen_norm(fd):
-    """Normalized (0..1) pen position from the kernel's current ABS state."""
-    result = []
+    """Normalized (0..1) pen position from the kernel's current ABS state, or None. The kernel zeroes
+    X, Y and the tool key whenever the pen leaves proximity, so a lifted pen has no evdev position -
+    same minimum-on-both-axes reading as a node that has not reported yet. Taken for a position, that
+    sent the ghost, the drag and the mouse warp to the top-left corner. So out of proximity AND on the
+    minimum together mean no position at all, never the corner."""
+    axes = []
     for code in (0, 1):                      # ABS_X, ABS_Y
         buf = bytearray(24)
         try:
@@ -283,8 +287,15 @@ def pen_norm(fd):
         value, lo, hi = struct.unpack("6i", buf)[:3]
         if hi <= lo:
             return None
-        result.append((value - lo) / (hi - lo))
-    return tuple(result)
+        axes.append((value, lo, hi))
+    keys = bytearray(96)
+    try:
+        fcntl.ioctl(fd, 0x80604518, keys)             # EVIOCGKEY(96): byte 40 bit 0 = BTN_TOOL_PEN (320), the pen in proximity
+    except OSError:
+        return None
+    if not keys[40] & 1 and all(value == lo for value, lo, _ in axes):
+        return None
+    return tuple((value - lo) / (hi - lo) for value, lo, hi in axes)
 
 
 # ── chunk: toggle
@@ -585,6 +596,7 @@ def watch(conf, follower, warper=None):
         ctl = os.open(CTL, os.O_RDWR | os.O_NONBLOCK)   # RDWR: pokers may come and go
     except OSError:
         ctl = None
+    conf = read_conf()                # again, now that the pipe is open: a poke sent before this open is not lost
     fds = {}                          # fd -> [path, bus, product, layout]
     for path, bus, product in nodes:
         layout = layout_for(conf, bus, product)

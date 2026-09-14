@@ -6,7 +6,12 @@
 # 1. Kernel evdev state of the pen node (EVIOCGABS): always current whenever
 #    the pen is in proximity, regardless of which window it hovers. Needs
 #    read access to /dev/input/event* - grant once with the udev uaccess
-#    rule printed by install.sh.
+#    rule printed by install.sh. The pen node is the device that can report
+#    BTN_TOOL_PEN, whatever its name. The kernel (wacom_exit_report) zeroes
+#    the pen's X, Y and tool key whenever it leaves proximity, so a lifted
+#    pen has no evdev position - it reads the minimum on both axes, same as
+#    a node that has not reported yet. The script exits 1 at once for that:
+#    XWayland's stylus data is older still.
 # 2. XWayland's stylus device (XInput2 via ctypes): fresh only while the pen
 #    hovers an X11 window (Krita, GIMP, Blender); stale over native Wayland
 #    windows.
@@ -32,6 +37,10 @@ import sys
 
 os.environ.setdefault("DISPLAY", ":0")
 debug = os.environ.get("DEBUG") == "1"
+BTN_TOOL_PEN = 0x140                   # the key code of a pen tool: the pen node is found by it, never by its name
+EVIOCGKEY_96 = 0x80604518              # EVIOCGKEY(96): the state of key codes 0 to 767
+LONG_BITS = struct.calcsize("L") * 8   # /proc/bus/input/devices prints its bitmaps as unsigned longs
+OUT_OF_RANGE = "out of range"          # evdev_pen_norm: the pen has no evdev position (out of proximity zeroes it)
 
 
 # ── chunk: trace
@@ -53,26 +62,27 @@ def screen_size():
 
 
 # ── chunk: evdev_pen_norm
-def evdev_pen_norm():
-    """Normalized (0..1) pen position from the kernel, or None."""
+def evdev_pen_norm(devices="/proc/bus/input/devices", dev_dir="/dev/input"):
+    """Normalized (0..1) pen position from the kernel. None: no pen node, or no access to it.
+    OUT_OF_RANGE: the pen has no evdev position right now. The arguments are for the rig."""
     try:
-        blocks = open("/proc/bus/input/devices").read().split("\n\n")
+        blocks = open(devices).read().split("\n\n")
     except OSError:
         return None
     node = None
     for block in blocks:
-        name_match = re.search(r'Name="([^"]*)"', block)
-        if not name_match:
-            continue
-        name = name_match.group(1).lower()
-        if "pen" not in name and "stylus" not in name:
-            continue
+        caps = re.search(r"^B: KEY=([0-9a-f ]+?)[ \t]*$", block, re.M)
         handler = re.search(r"Handlers=.*?(event\d+)", block)
-        if handler:
-            node = f"/dev/input/{handler.group(1)}"
-        break
+        if not caps or not handler:
+            continue
+        bits = 0
+        for word in caps.group(1).split():           # unsigned longs, the highest first
+            bits = bits << LONG_BITS | int(word, 16)
+        if bits >> BTN_TOOL_PEN & 1:                 # a capability, not a name: "pen" is also in "Suspend"
+            node = os.path.join(dev_dir, handler.group(1))
+            break
     if not node:
-        trace("evdev: no pen/stylus node in /proc/bus/input/devices")
+        trace(f"evdev: no device in {devices} can report BTN_TOOL_PEN")
         return None
     try:
         fd = os.open(node, os.O_RDONLY | os.O_NONBLOCK)
@@ -83,7 +93,7 @@ def evdev_pen_norm():
         trace(f"evdev: {err}")
         return None
     try:
-        result = []
+        axes = []
         for code in (0, 1):  # ABS_X, ABS_Y
             buf = bytearray(24)
             fcntl.ioctl(fd, 0x80184540 + code, buf)  # EVIOCGABS(code)
@@ -91,8 +101,13 @@ def evdev_pen_norm():
             trace(f"evdev: abs{code} value={value} range={lo}..{hi}")
             if hi <= lo:
                 return None
-            result.append((value - lo) / (hi - lo))
-        return tuple(result)
+            axes.append((value, lo, hi))
+        keys = bytearray(96)
+        fcntl.ioctl(fd, EVIOCGKEY_96, keys)
+        if not keys[BTN_TOOL_PEN // 8] >> BTN_TOOL_PEN % 8 & 1 and all(value == lo for value, lo, _ in axes):
+            trace("evdev: out of proximity and on the minimum of both axes: the kernel zeroed it on exit")
+            return OUT_OF_RANGE                      # a lifted pen has no evdev position - the kernel zeroes X, Y and the tool key
+        return tuple((value - lo) / (hi - lo) for value, lo, hi in axes)
     except OSError as err:
         trace(f"evdev ioctl: {err}")
         return None
@@ -200,23 +215,33 @@ def output_area():
     return fx, fy, fw, fh
 
 
-# ── chunk: main-flow
-scr = screen_size()
-if not scr:
-    sys.exit(1)
-sw, sh = scr[0], scr[1]
+# ── chunk: main
+def main(argv=None):
+    """evdev, then XWayland, then exit 1. OUT_OF_RANGE exits 1 at once: XWayland cannot know anything newer."""
+    argv = sys.argv[1:] if argv is None else argv
+    scr = screen_size()
+    if not scr:
+        sys.exit(1)
+    sw, sh = scr[0], scr[1]
 
-pos = evdev_pen_norm()
-source = "evdev"
-if pos is None:
-    pos = xwayland_stylus_norm(scr[3])
-    source = "xwayland"
-if pos is None:
-    sys.exit(1)
-trace(f"source={source}")
-if "--mapped" in sys.argv and source == "evdev":
-    rect = output_area()
-    if rect:
-        pos = (rect[0] + pos[0] * rect[2], rect[1] + pos[1] * rect[3])
-        trace(f"mapped -> {pos}")
-print(f"{int(pos[0] * sw)} {int(pos[1] * sh)} {sw} {sh}")
+    pos = evdev_pen_norm()
+    source = "evdev"
+    if pos == OUT_OF_RANGE:
+        trace("out of range: exit 1, the caller uses the mouse")
+        sys.exit(1)
+    if pos is None:
+        pos = xwayland_stylus_norm(scr[3])
+        source = "xwayland"
+    if pos is None:
+        sys.exit(1)
+    trace(f"source={source}")
+    if "--mapped" in argv and source == "evdev":
+        rect = output_area()
+        if rect:
+            pos = (rect[0] + pos[0] * rect[2], rect[1] + pos[1] * rect[3])
+            trace(f"mapped -> {pos}")
+    print(f"{int(pos[0] * sw)} {int(pos[1] * sh)} {sw} {sh}")
+
+
+if __name__ == "__main__":
+    main()

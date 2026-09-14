@@ -193,6 +193,15 @@ STUB_PRODUCT=855 "$T" toggle; sleep 0.4
 # 13: heal with no pen listed (the tablet left again): 2 s of retries, then exit 1 without a notice.
 t0=$(date +%s%N); STUB_NO_PEN=1 "$T" heal; rc=$?; t1=$(date +%s%N)
 check "13 heal without a pen: exit 1 after >= 1.8 s of retries" '[ "$rc" -eq 1 ] && [ $(( (t1 - t0) / 1000000 )) -ge 1800 ]'
+
+# 13b: those retries hold no lock (HLA-01). The daemon starts heal when a tablet appears. A key press or the
+#      ghost's `where` in the next 2 s used to wait behind it, with the daemon's input loop frozen meanwhile.
+STUB_NO_PEN=1 "$T" heal 2>/dev/null & hpid=$!
+sleep 0.3
+t0=$(date +%s%N); out=$("$T" where); t1=$(date +%s%N)
+wait "$hpid"; rc=$?
+check "13b a run during heal's retries does not wait for them (< 1 s)" '[ $(( (t1 - t0) / 1000000 )) -lt 1000 ] && [ "$(echo "$out" | wc -w)" -eq 7 ]'
+check "13b heal still gives up after its retries (exit 1)" '[ "$rc" -eq 1 ]'
 check "no notifications (no errors)"    '! grep -q notify-send "$STUB_LOG"'
 
 # 14: the tablet is switched off while precision mode is on (the 2026-09-12 hardware test). OFF must still
@@ -240,6 +249,16 @@ appear 864
 "$T" heal 2>/dev/null; sleep 0.4
 check "15 RECONNECT=0: a pause never resumes" '[ ! -f "$RD/saved-area" ] && [ ! -f "$RD/paused" ]'
 sed -i '/^RECONNECT=/d' "$S/conf/tabprec.conf"
+
+# 16: a DIM-only change (same width) must still apply the area again - the no-op guard used to
+#     compare width alone and skip a change that only touched dim strength.
+"$T" toggle; sleep 0.4
+n_before_dim=$(wc -l < "$FAKE_LOG"); sets_before_dim=$(sets)
+sed -i 's/^DIM=.*/DIM=0.33/' "$S/conf/tabprec.conf"
+"$T" resize; sleep 0.3
+check "16 DIM-only change still applies the area again" \
+    '[ "$(sets)" -gt "'"$sets_before_dim"'" ] && [ "$(wc -l < "$FAKE_LOG")" -gt "'"$n_before_dim"'" ] && tail -1 "$FAKE_LOG" | grep -q " 0.33$"'
+"$T" toggle; sleep 0.4
 
 echo "failures: $FAILS"
 [ "$FAILS" -eq 0 ]

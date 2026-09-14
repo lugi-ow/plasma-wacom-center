@@ -15,11 +15,10 @@ SRC = sys.argv[1]
 OUT = sys.argv[2] if len(sys.argv) > 2 else None
 FILES = ("tablet-precision.sh", "tablet-pen-pos.py", "tablet-overlay.py", "tablet-overlay.qml",
          "tablet-hover.py", "tablet-precision-size.sh", "tablet-size-preview.py",
-         "tablet-pointer-warp.py", "tablet-pad-probe.py", "wacom_center.py")
+         "tablet-pointer-warp.py", "tablet-pad-probe.py", "wacom_center.py", "wacom_profiles.py")
 # file -> [(line prefix that anchors the block, chunk name)]
 BLOCKS = {
-    "tablet-precision.sh": [("export LC_ALL=C.UTF-8", "config-and-paths")],
-    "tablet-pen-pos.py": [("scr = screen_size()", "main-flow")],
+    "tablet-precision.sh": [("export LC_ALL=C.UTF-8", "config-and-paths"), ('[ "$MODE" = heal ] && find_pen', "run-lock")],
     "tablet-overlay.py": [("USAGE = ", "args"), ("app = QGuiApplication", "window"),
                           ("if follow or fifo:", "input-source"), ("    def on_input", "on_input")],
     "tablet-overlay.qml": [("Window {", "overlay-window"), ("    Item {", "fading-item"),

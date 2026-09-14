@@ -1,0 +1,15 @@
+#!/bin/bash
+# Stub kwriteconfig6 for test_profiles.py ONLY (see kreadconfig6 beside it):
+# logs the call, then runs the real binary so a scratch kcminputrc is
+# written exactly like the live one.
+echo "kwriteconfig6 $*" >> "${STUB_LOG:-/dev/stderr}"
+HERE=$(cd "$(dirname "$0")" && pwd)
+REAL=""
+IFS=:
+for d in $PATH; do
+    [ "$d" = "$HERE" ] && continue
+    if [ -x "$d/kwriteconfig6" ]; then REAL="$d/kwriteconfig6"; break; fi
+done
+unset IFS
+[ -n "$REAL" ] || { echo "kwriteconfig6 stub: no real binary on PATH" >&2; exit 1; }
+exec "$REAL" "$@"

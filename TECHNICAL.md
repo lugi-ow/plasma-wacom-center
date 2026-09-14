@@ -91,8 +91,9 @@ seconds with the mode on (`GRACE`), it runs `tablet-precision.sh pause`, which
 closes the overlay and keeps the area in `$XDG_RUNTIME_DIR/tabprec/paused`. If
 the tablet comes back within `RECONNECT` seconds (a conf key and a Precision
 tab field, default 60, 0 = never), `heal` resumes precision mode at the same
-area. It does not place a new area at the pen, because the pen reads `0,0`
-right after a reconnect and a new area would land in the corner. A press of
+area. It does not place a new area at the pen: the kernel zeroes the pen's
+position whenever it leaves proximity, so it still has none right after a
+reconnect, and a new area would land around the mouse. A press of
 the precision key inside the window resumes it too. After the window the
 record is dropped. The grace keeps a cable swap from blinking the border, and
 the record dies at logout, so a crash never leaves a pause behind.
@@ -128,8 +129,13 @@ size preview (the ring, mode off) sits at the centre of the screen.
    hovers an X11 window.
 3. The mouse, through a one-shot KWin script. The last fallback.
 
-Right after a Bluetooth reconnect, evdev reports 0,0 until the pen first
-hovers the tablet.
+The pen node is the input device that can report `BTN_TOOL_PEN`, found in
+`/proc/bus/input/devices` by that key bit, not by its name. Right after the
+tablet appears, the node reports the minimum on both axes until the pen first
+comes into proximity. With `BTN_TOOL_PEN` clear as well, that is no position:
+`tablet-pen-pos.py` exits 1 at once and the toggle uses the mouse. XWayland is
+not asked, because its stylus data is older. The daemon's own reader applies
+the same rule, so the ghost and the mouse warp wait for the first hover.
 
 Evdev gives the position on the TABLET. It is the position on the screen
 only while the whole tablet is mapped to the whole screen, which is not
@@ -147,6 +153,13 @@ warps through the area file's fractions.
 `tablet-overlay.qml` is one drawing: four dim bands around the clear area
 and a 2 px amber border inside it. It is a full-screen layer-shell window
 on the overlay layer, transparent for input, so it never eats a click.
+The layer-shell QML module is the package `qml6-module-org-kde-layershell`,
+and not every Plasma install has it. Without it the overlay process exits at
+load: precision mode maps the pen and draws nothing. `install.sh` warns.
+The overlay sets the layer-shell scope `dock`. KWin takes a layer-shell
+window's type from its scope, and the default scope makes it a normal window.
+A normal window that appears ends Peek at Desktop, and Peek at Desktop hides
+it. A dock does neither.
 Precision mode has the solid border. Every preview has the waiting look:
 the same bands, with the border as 5 px dashes that flow clockwise, one
 period per 0.3 s. The previews are the ghost (a finger on the key, mode
@@ -241,6 +254,99 @@ Everything here needs write access to `/dev/uinput`. Kubuntu tags the
 node `uaccess` for the logged-in user. Elsewhere, add a udev rule:
 
     KERNEL=="uinput", TAG+="uaccess"
+
+## Pen
+
+Wacom Center's Pen tab sets the three buttons built into the pen, plus
+the pressure curve and the pressure range. These live in the pen
+device itself, not in the pad, so the tab uses a separate code path
+from the Pad buttons tab even though the layout matches it.
+
+Pen button 1 and Pen button 2 behave like a Pad buttons tab Press box:
+a shortcut, empty, or `Disabled`. Pen button 3 fires only when both
+side buttons of the pen are down together, and only over USB. The
+Bluetooth report for this tablet family has no bit for the combined
+press, so the button does nothing there. A pen with no third button
+still shows the box, and the box simply never fires.
+
+A box that already holds a binding set outside Wacom Center, in
+System Settings' Drawing Tablet page, shows read-only with the
+tooltip "Set in System Settings > Drawing Tablet." Wacom Center reads
+the binding to display it, and never writes over a binding it does
+not own.
+
+### Pressure curve and range
+
+The curve editor is a two-handle curve on a unit square, the same
+control System Settings' Drawing Tablet page uses. Drag a handle from
+the lower-left corner (no pressure) toward the upper-right corner
+(full pressure). Four spin boxes mirror the two handle positions:
+"Point 1 input", "Point 1 output", "Point 2 input", "Point 2 output",
+each ranging 0.00 to 1.00. Type a value into one of these instead of
+dragging, and the graph updates to match. "Reset Pressure" sets both
+handles back to the diagonal, which is no curve at all.
+
+The pressure range is two more fields, minimum and maximum, also 0.00
+to 1.00. They stay enabled even when the pen has not yet reported its
+pressure capability to the system. A note in the tab says so, and the
+range applies once the pen reports.
+
+"Apply" writes the pen buttons and the pressure settings together. If
+the pen is not connected, the tab keeps every field editable and
+shows a note that the settings apply once the pen connects, so you
+can prepare a binding or a curve ahead of time.
+
+## Profiles
+
+A profile is a full copy of the settings on the Precision, Pad
+buttons, and Pen tabs. Pie menus are not part of a profile. They live
+in Kando, a separate app, and Wacom Center does not read or write
+them.
+
+Profiles are `.wcprofile` files, plain text, split into sections:
+
+| Section | Holds |
+|---|---|
+| `[Conf]` | the `tabprec.conf` settings, such as `SCALE` and `DIM` |
+| `[Pad]` | the 8 pad buttons |
+| `[Ring]` | the ring's 4 modes |
+| `[Pen]` | the 3 pen buttons |
+| `[Pressure]` | the pressure curve and range |
+| `[Image]` | the profile's picture, if it has one |
+
+Profiles live in `~/.local/share/wacom-center/profiles/`. Backups
+live in `~/.local/share/wacom-center/backup/`. Wacom Center writes
+one backup of a profile the first time that profile changes in a
+session, so you can undo the change. Wacom Center records which
+profile is active, and which profile sits in which grid cell, in
+`~/.local/share/wacom-center/profiles.ini`.
+
+Importing a profile is safe against a malformed or hand-edited file.
+Wacom Center checks every value against a strict format before it
+applies the value. Wacom Center drops a value that does not fit the
+format, does not apply it, and reports it in the tab's status line.
+
+The Profiles tab is the last tab. The button at the top opens a
+search list of every profile. Click an entry to switch to it. The "+"
+button next to it imports a profile from a file on disk. The 3-by-3
+grid below gives one-click access to up to 9 profiles. A filled cell
+switches to its profile at once. The current profile's cell is
+outlined and does nothing when clicked. An empty cell is dashed.
+"Edit Grid" (it reads "Done" while active) opens a per-cell dialog to
+assign a profile and set or clear its picture, with `Choose Image...`
+and `Remove Image`.
+
+"Export All Current Settings as Profile..." writes the current
+Precision, Pad buttons, and Pen tab settings out as a new profile
+file.
+
+Switching profiles applies the new `[Conf]`, `[Pad]`, `[Ring]`,
+`[Pen]`, and `[Pressure]` values at once. It never toggles precision
+mode by itself. A changed pen button, pie key, or pressure curve
+takes effect within about a second of the switch.
+
+One Wacom Center window can be open at a time. Opening a second one
+brings the first one to the front instead.
 
 ## The ExpressKey touch preview and the area drag
 
@@ -415,8 +521,10 @@ with the removal lines printed.
 
 A command shortcut needs all three: `X-KDE-GlobalAccel-CommandShortcut=true`
 in the entry, `kbuildsycoca6`, and `doRegister` + `setForeignShortcut` on
-the shortcut daemon. `install.sh` does all three. After a relogin the
-daemon rebuilds them from `kglobalshortcutsrc`.
+the shortcut daemon. `install.sh` does all three. The shortcuts start
+nothing until the next login, when the daemon rebuilds them from
+`kglobalshortcutsrc`. `uninstall.sh` first calls `unregister` for each entry,
+which frees its key at once, then deletes the entry's keys from that file.
 
 Pad and ring chords: F-keys and modifiers only. KWin resolves a letter
 through the active keyboard layout, so `Meta+Shift+P` sends nothing under a
@@ -446,8 +554,8 @@ Runtime files live in `$XDG_RUNTIME_DIR/tabprec/`. The pen ledgers live in
 - Base mapping. The placement assumes the default full-tablet stretch.
   Toggle-off restores a letterboxed mapping from the Display page
   correctly, but the cursor-stationary placement drifts.
-- Bluetooth reconnect. Before the pen first hovers, evdev reports 0,0 and a
-  toggle lands the area top-left.
+- A tablet that has just appeared. Until the pen first hovers, there is no
+  pen position, and a toggle places the area around the mouse pointer.
 - Stylus click-to-focus between windows does not work in Plasma 6.6 (KDE
   bug 498386 and friends). The bug is upstream.
 - A sleeping DisplayPort monitor removes the output. KWin runs a 1920x1080
@@ -464,9 +572,9 @@ bash only: no Qt, no tablet, no KWin. Exit 0 = all green.
 |---|---|
 | `py_compile`, `bash -n` | every Python file compiles, every shell script parses |
 | `tests/check_map.py` | every chunk marker has a bullet in `PROJECT_MAP.md`, and every bullet names a marker |
-| `tests/test_script.sh` (63 checks) | the toggle: on, move, resize around the centre with the clamp, suspend, resume, off, the run lock. The write-back: a bus switch and a logout while on leave the pen on the whole screen, a base that is not the whole screen is put back as itself, the ledger fallback when the write-back cannot be proved, OFF with the tablet switched off, and a pause that resumes at the same area within `RECONNECT` seconds. A stubbed `busctl` that keeps `outputArea` per product AND seeds a device that has just appeared from `kcminputrc`, the way KWin does |
+| `tests/test_script.sh` (65 checks) | the toggle: on, move, resize around the centre with the clamp, suspend, resume, off, the run lock, and a heal that waits for the pen without holding that lock. The write-back: a bus switch and a logout while on leave the pen on the whole screen, a base that is not the whole screen is put back as itself, the ledger fallback when the write-back cannot be proved, OFF with the tablet switched off, and a pause that resumes at the same area within `RECONNECT` seconds. A stubbed `busctl` that keeps `outputArea` per product AND seeds a device that has just appeared from `kcminputrc`, the way KWin does |
 | `tests/test_size.sh` (22 checks) | the ring script: the step and its clamps, `RING_STEP` from the conf, resize only with the mode on, the preview only with it off, nothing while the marker is fresh, and 12 ticks at once stepping `SCALE` exactly 12 times without losing a conf line |
-| `tests/test_hover.py` (70 checks) | the daemon: a named pipe plays the pad, a fake pen, fake overlays, a fake toggle. The ghost, the drag, `waiting` and `solid`, a conf edit mid-rest, `HOLD` 0, the long press and what must not arm it, the heal that a node set starts, and the runtime dir and control pipe the daemon makes for itself at a fresh login, and the absence timer that pauses precision mode |
+| `tests/test_hover.py` (80 checks) | the daemon: a named pipe plays the pad, a fake pen, fake overlays, a fake toggle. The ghost, the drag, `waiting` and `solid`, a conf edit mid-rest, `HOLD` 0, the long press and what must not arm it, the heal that a node set starts, and the runtime dir and control pipe the daemon makes for itself at a fresh login, and the absence timer that pauses precision mode. A held touch chord and the ghost released when the tablet goes away, and a new heal when it returns. A pen with no position yet, in the daemon's reader and in `tablet-pen-pos.py` (the pen node found by `BTN_TOOL_PEN`, then exit 1 without asking XWayland) |
 
 Not part of the gate: `tests/add_markers.py` puts a chunk marker above every
 new def, function or mode (idempotent).

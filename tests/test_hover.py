@@ -59,6 +59,16 @@ if not STALE_FILE_REPLACED:
     hover.CTL.unlink()                        # let the rest of the rig run, so both probes report as checks
     os.mkfifo(hover.CTL)
 
+# A poke that races ahead of watch() opening the pipe must not be lost: watch() re-reads the conf
+# a second time, once the pipe is open, rather than trusting the value cycle() read before either
+# the node set or the pipe existed.
+_READ_CALLS = []
+_ORIG_READ_CONF = hover.read_conf
+hover.read_conf = lambda: (_READ_CALLS.append(1), _ORIG_READ_CONF())[1]
+hover.watch(hover.read_conf(), None, None)    # mirrors cycle()'s own call shape
+hover.read_conf = _ORIG_READ_CONF
+WATCH_REREADS_CONF = len(_READ_CALLS) >= 2
+
 PEN = [(0.5, 0.5)]
 hover.pen_open = lambda: os.open("/dev/null", os.O_RDONLY)
 hover.pen_norm = lambda fd: PEN[0]
@@ -93,7 +103,8 @@ class FakeWarper:                         # never the real one: it would move th
 
 PAD = SCRATCH / "pad.fifo"
 os.mkfifo(PAD)
-hover.wacom_nodes = lambda: [(str(PAD), "bt", "0360")]
+NODES = [(str(PAD), "bt", "0360")]        # section X empties it (the tablet goes away), then fills it again
+hover.wacom_nodes = lambda: list(NODES)
 
 # the live overlay's pipe, read like the real overlay does (RDWR, no EOF)
 FIFO = hover.FIFO
@@ -168,6 +179,7 @@ ghost = lambda: GHOST_LOG.read_text() if GHOST_LOG.exists() else ""
 # --- A0: the daemon makes its own runtime dir and control pipe (probed before the rig made either) ---
 check("A0 fresh login: the daemon makes its own runtime dir and control pipe", FRESH_LOGIN_PIPE)
 check("A0 a plain file at hover.ctl is replaced by a pipe", STALE_FILE_REPLACED)
+check("A0 a conf change poked before watch opens the pipe is applied", WATCH_REREADS_CONF)
 
 # --- S: the node set opened: the daemon starts the toggle's heal, in the background ---
 check("S the pad node opened: heal started once", ghost().count("CALL heal") == 1)
@@ -506,6 +518,105 @@ hp.watch = lambda *a: True
 hp.cycle(None, None, g, rescan=0)
 check("P the tablet back resets the timer", g.since is None and calls == [])
 STATE.unlink()
+
+# --- X: the tablet goes away while a touch chord is held and the ghost is up (a lost Bluetooth link).
+#        Nothing may stay pressed or drawn: a latched Ctrl turns every click into a Ctrl+click. When the
+#        tablet comes back, the node set opens again and starts a new heal ---
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\nLONG=1.0\n"
+                "TOUCH_CHORD_2=Ctrl\nTOUCH_HOLD_2=0.1\n")
+poke()
+heals = ghost().count("CALL heal")
+n_ev = len(EVENTS)
+report(touch=0x82)                         # one finger on the precision key (the ghost), one on key 2 (Ctrl)
+time.sleep(0.35)
+ghost_pid = follower.proc.pid if follower.proc else None
+check("X before: the touch chord is held and the ghost is up",
+      ("down", ("touch", 2), "Ctrl") in EVENTS[n_ev:] and follower.up and ghost_pid is not None)
+NODES[:] = []                              # the node leaves the list, and its reads end
+os.close(writer)
+time.sleep(0.4)
+check("X gone: the touch chord is released", EVENTS[n_ev:].count(("up", ("touch", 2))) == 1)
+check("X gone: the ghost closes",
+      not follower.up and ghost_pid is not None and not os.path.exists(f"/proc/{ghost_pid}"))
+writer = os.open(PAD, os.O_RDWR)           # the tablet is back
+NODES[:] = [(str(PAD), "bt", "0360")]
+time.sleep(0.6)
+check("X back: the node set opens again and starts a new heal", ghost().count("CALL heal") == heals + 1)
+
+# --- N: out of range. The kernel zeroes X, Y and the tool key whenever the pen leaves proximity, so a
+#        lifted pen reads the minimum on both axes - same as a node that has not reported yet. The daemon
+#        took that for the top-left corner (the ghost, the drag and the warp jumped there), and
+#        tablet-pen-pos.py printed the corner instead of exiting 1 so the toggle could use the mouse. The
+#        module copy from P runs pen_norm, never the daemon thread's ---
+import struct
+
+
+class FakeEvdev:                           # stands in for the fcntl module inside a module copy
+    def __init__(self, x, y, in_prox, node=None, lo=0, hi=1000):
+        self.x, self.y, self.in_prox, self.node, self.lo, self.hi = x, y, in_prox, node, lo, hi
+
+    def ioctl(self, fd, request, buf):
+        if self.node and os.readlink(f"/proc/self/fd/{fd}") != str(self.node):
+            raise OSError(25, "not the pen node")          # proves which node the reader opened
+        if request == 0x80604518:          # EVIOCGKEY(96): byte 40 bit 0 = BTN_TOOL_PEN, the pen in proximity
+            buf[40] = 1 if self.in_prox else 0
+        else:                              # EVIOCGABS(ABS_X) or EVIOCGABS(ABS_Y)
+            value = (self.x, self.y)[request - 0x80184540]
+            buf[:24] = struct.pack("6i", value, self.lo, self.hi, 0, 0, 0)
+
+
+nfd = os.open("/dev/null", os.O_RDONLY)
+hp.fcntl = FakeEvdev(0, 0, False)
+check("N daemon: out of proximity on the minimum = no position, not the corner", hp.pen_norm(nfd) is None)
+hp.fcntl = FakeEvdev(500, 250, False)
+check("N daemon: out of proximity but not on the minimum still reads as a position", hp.pen_norm(nfd) == (0.5, 0.25))
+hp.fcntl = FakeEvdev(0, 0, True)
+check("N daemon: the real corner, in proximity, is a position", hp.pen_norm(nfd) == (0.0, 0.0))
+os.close(nfd)
+
+DEVICES = SCRATCH / "input-devices"        # a name with "pen" in it that is no pen comes first, then the tablet's nodes
+DEVICES.write_text(
+    'N: Name="Suspend Button"\nH: Handlers=kbd event0 \nB: KEY=4000 0 0\n\n'
+    'N: Name="Wacom Intuos Pro M Pen"\nH: Handlers=mouse3 event23 \nB: KEY=1c03 0 0 0 0 0\nB: ABS=3000003\n\n'
+    'N: Name="Wacom Intuos Pro M Finger"\nH: Handlers=mouse4 event24 \nB: KEY=2c08 0 0 0 0 0\n\n'
+    'N: Name="Wacom Intuos Pro M Pad"\nH: Handlers=event25 \nB: KEY=800 3ff 0 0 0 0\n')
+for name in ("event0", "event23", "event24", "event25"):
+    (SCRATCH / name).write_text("")
+try:
+    spec_n = importlib.util.spec_from_file_location("pen_pos", SRC.parent / "tablet-pen-pos.py")
+    pen_pos = importlib.util.module_from_spec(spec_n)
+    spec_n.loader.exec_module(pen_pos)       # must not run its main flow on import
+except BaseException as err:                 # noqa: BLE001 - a copy that runs or crashes on import fails every check below
+    print(f"# tablet-pen-pos.py import: {err!r}")
+    pen_pos = None
+def attempt(call):
+    """An old or broken copy must fail its check, not stop the rig."""
+    try:
+        return call()
+    except SystemExit as stop:
+        return ("exit", stop.code)
+    except Exception as err:                 # noqa: BLE001
+        return ("error", repr(err))
+
+
+got = asked = None
+if pen_pos is not None:
+    pen_pos.fcntl = FakeEvdev(600, 300, False, node=SCRATCH / "event23")
+    got = attempt(lambda: pen_pos.evdev_pen_norm(str(DEVICES), str(SCRATCH)))
+check("N pen-pos: the node that can report BTN_TOOL_PEN, not the first name with 'pen' in it", got == (0.6, 0.3))
+if pen_pos is not None:
+    pen_pos.fcntl = FakeEvdev(0, 0, False, node=SCRATCH / "event23")
+    got = attempt(lambda: pen_pos.evdev_pen_norm(str(DEVICES), str(SCRATCH)))
+check("N pen-pos: out of range (the kernel zeroed it) = OUT_OF_RANGE, never the corner",
+      pen_pos is not None and got == getattr(pen_pos, "OUT_OF_RANGE", "absent"))
+if pen_pos is not None:
+    asked = []
+    pen_pos.screen_size = lambda: (2560, 1440, None, None)
+    pen_pos.evdev_pen_norm = lambda: getattr(pen_pos, "OUT_OF_RANGE", None)
+    pen_pos.xwayland_stylus_norm = lambda dpy: asked.append(dpy) or (0.1, 0.1)
+    got = attempt(lambda: pen_pos.main([]))
+check("N pen-pos: OUT_OF_RANGE exits 1 at once, XWayland unasked (its data is older), so the toggle uses the mouse",
+      got == ("exit", 1) and asked == [])
 
 print(f"failures: {fails}")
 os.close(writer)

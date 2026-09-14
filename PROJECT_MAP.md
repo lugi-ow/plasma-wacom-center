@@ -18,7 +18,7 @@ markers do not. `tests/check_map.py` keeps this file and the markers in step;
 | `tablet-hover.py` | the autostart entry (install.sh) | always | every Wacom hidraw node, the pen's evdev node, the toggle (`where`, `suspend`, `resume`, `toggle` on a long press, `heal` when a node set opens, `pause` when the tablet stays gone), the overlay pipe, the conf + the `hover.ctl` reload pipe, one virtual device on `/dev/uinput` (the mouse onto the pen, then a key's press or touch chord) |
 | `tablet-precision-size.sh` | the ring's two chords | one run per tick | the conf (SCALE, RING_STEP), the relocate marker, the toggle (`resize`, mode on) or the size preview (mode off) |
 | `tablet-size-preview.py` (+ `tablet-overlay.qml`) | the ring script, mode off, when none is running | until 1.2 s after the last conf change, or at once when the mode comes on | the conf (mtime), the state file |
-| `wacom_center.py` | the launcher entry | a window | the conf, `kcminputrc`, `kglobalshortcutsrc` (read), KWin's device list (the pad, the aspect), the toggle |
+| `wacom_center.py` | the launcher entry | a window (`QLocalServer` "wacom-center": a second start raises this one and exits) | the conf, `kcminputrc`, `kglobalshortcutsrc` (read), KWin's device list (the pad, the pen, the aspect) and D-Bus properties (pressure), the toggle, `wacom_profiles.py` (profile files, checkpoint, the switch) |
 | `tablet-pad-probe.py` | you, in a terminal | until Ctrl+C | hidraw |
 
 Who ends what: the toggle kills the precision overlay through `overlay.pid`;
@@ -39,7 +39,7 @@ ledgers must outlive the session, so they live in
 | `$RD/overlay.pid` | `apply_area` | `apply_area` (alive?), toggle OFF (kill) | pid of the precision overlay |
 | `$RD/overlay.fifo` | created by the overlay (`--fifo`, held O_RDWR); written by `apply_area` and the daemon | the overlay | lines `X Y W H [DIM]` (move), `waiting` / `solid` (the border); applied in order, under PIPE_BUF |
 | `$RD/relocate` | the daemon: touched at the hold, then at 30 Hz while dragging; removed on a cancel | the toggle: younger than 3 s = MOVE instead of OFF; the ring script: younger than 3 s = the tick does nothing | its mtime is the message; never deleted on a press |
-| `$RD/lock` | every run of the toggle script (`flock`) | — | one run at a time; the spawned overlay closes the descriptor (`9>&-`) |
+| `$RD/lock` | every run of the toggle script (`flock`), after `heal` has looked for the pen | — | one run at a time; the spawned overlay closes the descriptor (`9>&-`) |
 | `$RD/pen` | the toggle, after a walk over KWin's device list | the toggle (every run that needs the pen) | the pen's KWin sysname; one `tabletTool` call confirms it, a stale one triggers a new walk |
 | `$RD/paused` | `pause` (the daemon: the tablet gone past its grace with the mode on) | `unpause` (`heal`, toggle ON) | three lines: when the tablet went (epoch s), the base, the area line. Resumed within `RECONNECT` s, else dropped; dies at logout |
 | ledger `<state>/tabprec/<vendor>-<product>` | the toggle's `map_area`, ONLY when `unpersist` cannot prove the write-back | `heal_off` (mode `heal`, toggle ON); toggle OFF and a proved write-back delete it | `BFX BFY BFW BFH FX FY FW FH`: the pen's base and the last rectangle set on it. Never written on a healthy system |
@@ -60,6 +60,11 @@ ledgers must outlive the session, so they live in
 | conf `HOVER_REPORT`, `HOVER_BYTE`, `PRESS_BYTE`, `PRESS_MASK` (+ `_USB` / `_BT`) | you, for an unknown model (from the probe) | the daemon | report layout overrides |
 | KWin `outputArea` (D-Bus) | the toggle only | — | the pen's LIVE mapping, in KWin's memory. The precision rectangle exists only here and in `$RD`, both of which die with the session; the device's `size` gives the tablet's aspect |
 | `kcminputrc` `[Libinput][<vendor>][<product>][<name>]` `OutputArea` | KWin (on every D-Bus write) and then the toggle's `unpersist`, which puts the BASE back at once and reads it to prove it | KWin, whenever that device appears | the mapping the pen must have with precision mode OFF. The key is DELETED when that is the whole screen (absent = `0,0,1,1` to KWin). USB and Bluetooth are two products = two groups |
+| `$RD/conf.lock` | the ring script AND now Wacom Center (`save_conf_key`/`drop_conf_key`, `switch_to`'s conf block) - `flock`, non-blocking, retried up to 5 s | — | one conf writer at a time; not taken, the write raises and nothing is written |
+| `${XDG_DATA_HOME:-~/.local/share}/wacom-center/profiles/<name>.wcprofile` | Wacom Center (`checkpoint`, import, export, the cell dialog's image) | Wacom Center (`read_profile`, the switch) | one profile: `[Conf]` `[Pad]` `[Ring]` `[Pen]` `[Pressure]` `[Image]` sections, the `.wcprofile` format below |
+| `.../backup/<name>.wcprofile` | Wacom Center, once per window, the first time a profile's text changes (`checkpoint`, `backup_now`) | you, by hand | the profile as it was before this window touched it |
+| `.../profiles.ini` | Wacom Center | Wacom Center (every tab rebuild) | `[Active] name`; `[Grid] 1`–`9` (a profile name or empty, 1 = top-left, row-major); `[Device] pad`, `pen` - only a LIVE KWin detection writes `[Device]`, the asleep/disconnected fallbacks only read it |
+| `.wcprofile` sections | `write_profile` (the fixed key order) | `read_profile` (the only reader; refuses a file over 2 MB or not UTF-8) | `[Pad]` keys are 0-based libinput pad button numbers, `[Pen]` keys are evdev codes (331/332/329) - same shape, two schemes. An empty value means the key is absent in the live file |
 
 Placement, shared by the toggle, the ghost and the drag: `w = sw · SCALE`,
 `h = w / aspect`, `x = cx/sw · (sw − w)`, `y = cy/sh · (sh − h)`, with the pen
@@ -95,12 +100,13 @@ the pen in KWin's device list (cached sysname, one call to confirm), reads the
 pen position from `tablet-pen-pos.py` (the mouse as fallback, through a
 one-shot KWin script), computes the area, sets `outputArea`, then moves or
 spawns the overlay. One run at a time; a run reads the conf after taking the
-lock. KWin writes every mapping it is given into `kcminputrc`, so every
+lock, and `heal` looks for the pen before it. KWin writes every mapping it
+is given into `kcminputrc`, so every
 rectangle goes through `map_area`, which writes the base back there at once:
 no rectangle outlives the session. A ledger is written only when that
 write-back cannot be proved. OFF needs no pen; the daemon pauses the mode when
 the tablet goes, and `heal` resumes it.
-- **chunk: `config-and-paths`** — the D-Bus names, the runtime dir and its file names, the run lock (`flock`, 5 s wait), then the conf with defaults.
+- **chunk: `config-and-paths`** — the D-Bus names, the runtime dir and its file names.
 - **chunk: `note`** — notify-send wrapper; only errors notify.
 - **chunk: `kload`** / **`kunload`** — load and unload the one-shot KWin script of the mouse fallback.
 - **chunk: `find_pen`** — the pen's sysname: cached (`$RD/pen`, one call confirms it) or a walk; none = notice + exit (`heal`: silent after 2 s; OFF: returns).
@@ -114,6 +120,7 @@ the tablet goes, and `heal` resumes it.
 - **chunk: `remap`** — the area on record onto the pen again (`resume`, `heal` while ON); a 7-field area file gets its fractions.
 - **chunk: `heal_off`** — mode OFF: a pen still on its ledger's rectangle gets its base back; the ledger is spent either way.
 - **chunk: `unpause`** — a pause younger than `RECONNECT` s: the mode back at the SAME area; older, or 0 = dropped.
+- **chunk: `run-lock`** — `heal` finds the pen first (its 2 s wait holds no lock); then `flock` (5 s wait) and the conf with defaults.
 - **chunk: `resize`** — while ON: `area_math centre` on the recorded centre, then `apply_area` (the ring calls it); nothing when the width is already on screen; the pen only without a record.
 - **chunk: `where`** — prints the area a toggle ON would map now, nothing changed (the ghost).
 - **chunk: `suspend`** / **`resume`** — while ON: the base mapping back / the recorded area again through `remap` (the daemon brackets a drag with them).
@@ -124,17 +131,19 @@ the tablet goes, and `heal` resumes it.
 ### `tablet-pen-pos.py` — "X Y SW SH" of the pen, in physical pixels
 Best source first: the kernel's evdev state of the pen node (needs the udev
 uaccess rule), then XWayland's stylus valuators (fresh only over X11 windows).
-Exit 1 when neither works; callers fall back to the mouse. `DEBUG=1` traces.
+The kernel zeroes the pen's X, Y and tool key whenever it leaves proximity, so
+a lifted pen has no evdev position; exit 1 when neither source works, or at
+once on that state (`OUT_OF_RANGE`) so callers fall back to the mouse. `DEBUG=1` traces.
 Plain, evdev is stretched over the whole screen — the space the
 cursor-stationary math wants; `--mapped` puts it through the pen's live
 outputArea instead, for a caller that needs the pixel the cursor is on.
 - **chunk: `trace`** — stderr tracing under DEBUG=1.
 - **chunk: `screen_size`** — the X screen size (physical pixels) and the display handle.
-- **chunk: `evdev_pen_norm`** — normalized pen position from EVIOCGABS on the pen node.
+- **chunk: `evdev_pen_norm`** — the node that can report BTN_TOOL_PEN, its EVIOCGABS position; `OUT_OF_RANGE` when the pen has no position (out of proximity zeroes it).
 - **chunk: `XIAnyClassInfo`** / **`XIValuatorClassInfo`** / **`XIDeviceInfo`** — ctypes mirrors of the XInput2 structs.
 - **chunk: `xwayland_stylus_norm`** — normalized position of the first enabled stylus device, via XIQueryDevice.
 - **chunk: `output_area`** — the pen's live outputArea from KWin (the precision rectangle) for `--mapped`; sysname from the toggle's cache, no cache or no answer = the whole screen.
-- **chunk: `main-flow`** — evdev, then XWayland, then exit 1; `--mapped` puts an evdev position through the area; prints pixels.
+- **chunk: `main`** — evdev (`OUT_OF_RANGE` = exit 1 at once), then XWayland, then exit 1; `--mapped` puts evdev through the area; prints pixels.
 
 ### `tablet-overlay.py` — the dim-around overlay
 One process per overlay. Args `X Y W H [DIM]`; `--waiting` starts it in the
@@ -151,7 +160,7 @@ quits on its own. The lines `waiting` and `solid` switch the border.
 Root properties, set from Python: `px py pw ph` (the clear rectangle),
 `dimval`, `waiting` (the flowing dashed border), `shown` (false = fade out),
 `phase` (the dash offset the animation drives).
-- **chunk: `overlay-window`** — full-screen layer-shell window on the overlay layer, transparent for input; the properties.
+- **chunk: `overlay-window`** — full-screen layer-shell window on the overlay layer, scope `dock` (Peek at Desktop stays), transparent for input; the properties.
 - **chunk: `fading-item`** — everything drawn sits in it; its opacity follows `shown` with a 450 ms animation.
 - **chunk: `dim-bands`** — four rectangles around the clear area at `dimval` alpha.
 - **chunk: `solid-border`** — the 2 px inset amber border of precision mode; hidden while waiting.
@@ -184,13 +193,13 @@ resumed); a tablet gone for `GRACE` pauses the mode.
 - **chunk: `FAMILIES`** / **`MODELS`** — built-in report layouts per family and bus; product id → family.
 - **chunk: `layout_for`** — one node's layout: conf overrides over built-ins; mask None = no precision key.
 - **chunk: `wacom_nodes`** — every Wacom hidraw node with its bus and product id, from sysfs.
-- **chunk: `pen_open`** / **`pen_norm`** — the pen's evdev fd; its normalized position from EVIOCGABS.
+- **chunk: `pen_open`** / **`pen_norm`** — the pen's evdev fd; its normalized position from EVIOCGABS, None when out of proximity and on the minimum (the kernel zeroes it on exit).
 - **chunk: `toggle`** — runs `tablet-precision.sh MODE` (suspend / resume / toggle / pause); reports success.
 - **chunk: `heal`** — `tablet-precision.sh heal` in the background, never waited for; `watch` starts it per opened node set.
 - **chunk: `Follower`** — the rectangle that follows the pen: `show` (ghost), `move` (drag, sends `waiting`), `follow` (tick), `hide` (cancel or confirm, sends `solid`).
 - **chunk: `Warper`** — the mouse onto the pen and the chords: `ensure` (one device, retried), `warp(mapped, why)`, `chord_down`/`chord_up` (press/touch tags, after the warp), `release_all`, `close`.
 - **chunk: `mask_text`** — "none" or the hex mask, for the log.
-- **chunk: `watch`** — opens the node set and `heal`s; the loop: reports → warp, then `CHORD_<n>` / `TOUCH_CHORD_<n>` (mask key exempt); the timers; the pipe reload; rescans.
+- **chunk: `watch`** — opens the node set, `heal`s; re-reads the conf once the pipe opens (an earlier poke is not lost); reports→warp, chords; timers; reload; rescans.
 - **chunk: `Absence`** — the tablet gone with the mode ON: past `GRACE` (10 s) runs `pause` with the moment it went.
 - **chunk: `cycle`** — one daemon pass: `watch` while the tablet is here, else time its absence and sleep.
 - **chunk: `main`** — `--simulate`, or `cycle` forever with one `Warper` and one `Absence`.
@@ -245,27 +254,67 @@ motion before the chord (`parse_chord` / `chord`).
 - **chunk: `main`** — reads every node, prints each changed byte with node, bus and report id.
 
 ### `wacom_center.py` — the settings window
-- **chunk: `paths`** — the conf and control-pipe paths, the KWin names, the toggle's shortcut group, the amber and red constants, the STE tooltips.
-- **chunk: `busget`** / **`detect_devices`** — KWin property reads; the pad name and the tablet aspect by capability (`tabletPad`, `tabletTool`).
-- **chunk: `read_conf`** / **`write_conf`** — the numeric conf keys with defaults; write SCALE, DIM, LONG, RING_STEP, RECONNECT, keeping every other line.
-- **chunk: `save_conf_key`** / **`drop_conf_key`** / **`conf_value`** — one conf line set, removed, or read raw (`CHORD_<n>`); the rest kept.
-- **chunk: `poke_daemon`** — one `reload` line into `hover.ctl`: the daemon re-reads the conf at once; no pipe = nothing to do.
-- **chunk: `toggle_chord`** — the precision toggle's global shortcut from kglobalshortcutsrc; the documented default when missing.
-- **chunk: `chord_rules`** — `parse_chord` imported from the warp module beside this file; None = the pie validation is off.
-- **chunk: `kread`** / **`kwrite`** — a pad key's chord in `kcminputrc [ButtonRebinds]`; the literal `Disabled` swallows the key (what a conf `CHORD_<n>` key needs).
-- **chunk: `ring_read`** / **`ring_write`** — one ring mode's binding (groups 0–3): two chords + tick angle; both empty = unbound; threshold = degrees × 120.
-- **chunk: `precision_ring_mode`** — which ring mode carries the precision-size pair; (0, defaults) when none does.
-- **chunk: `PrecisionTab`** — the size and dim sliders, the long-press and reconnect fields, the ring step, tick angle and direction swap, the toggle button; ring writes go to the size pair's mode.
-- **chunk: `pad_icon`** / **`ring_icon`** — the key and ring pictures: the box with its dot/dash mark, the doughnut with mode n's light (7:30, clockwise).
-- **chunk: `draw_ants`** / **`AntsLineEdit`** / **`AntsCheckBox`** / **`AntsRadio`** — the flowing dashed outline: amber = a pie side's box, red = a field precision mode consumes.
-- **chunk: `PadTab`** — the pad table: key pictures, Touch + Press boxes, the per-key register (`TOUCH_HOLD_<n>`), the rings, two pie ticks, the Precision tick, apply + poke; no pad = a note.
-- **chunk: `main`** — detects the pad and the aspect once; the window, the tabs (`pad` opens the second), the two launcher buttons.
+- **chunk: `paths`** — conf and pipe paths, KWin names, the toggle's shortcut group, colors, STE tooltips.
+- **chunk: `busget`** / **`detect_devices`** — KWin reads; pad, pen+sysname, aspect; saves both names to `profiles.ini [Device]`.
+- **chunk: `read_conf`** — the numeric conf keys with defaults, for the tabs' initial values.
+- **chunk: `save_conf_key`** / **`drop_conf_key`** / **`conf_value`** — wrap `wacom_profiles`' locked versions; `conf_value` reads one raw value.
+- **chunk: `poke_daemon`** — wraps `wacom_profiles.poke_daemon`, returns its bool.
+- **chunk: `toggle_chord`** — the toggle's shortcut from kglobalshortcutsrc; the documented default when missing.
+- **chunk: `chord_rules`** — `parse_chord` from the warp module beside this file; None = pie validation off.
+- **chunk: `kread`** / **`kwrite`** — a pad key's raw value (`Key,<seq>` stripped, else raw text); `Disabled` swallows the key.
+- **chunk: `is_raw_form`** / **`kread_group`** / **`kwrite_group`** — a binding to show read-only; the same read/write for any group (the Pen tab).
+- **chunk: `ring_read`** / **`ring_write`** — one ring mode's binding: two chords + angle; both empty = unbound; threshold = degrees × 120.
+- **chunk: `precision_ring_mode`** — which mode carries the precision-size pair; (0, defaults) when none; looked up fresh.
+- **chunk: `PrecisionTab`** — size/dim sliders (debounced 300 ms, `flush_pending` first), long-press/reconnect/ring-step, tick angle + swap.
+- **chunk: `pad_icon`** / **`ring_icon`** — the key and ring pictures: dot/dash mark, the doughnut with mode n lit (7:30, clockwise).
+- **chunk: `draw_ants`** / **`AntsLineEdit`** / **`AntsCheckBox`** / **`AntsRadio`** — the flowing outline: amber = a pie box, red = precision's field.
+- **chunk: `PadTab`** — the pad table: Touch+Press (read-only if raw), rings, pie ticks, the Precision tick, apply+`checkpoint()`; asleep=banner.
+- **chunk: `_parse_curve`** / **`_read_pressure_group`** — `"x1,y1;x2,y2;"` to 4 floats; the first kcminputrc pen group with the pressure keys.
+- **chunk: `CurveGraph`** — the 160×160 px Bézier editor: two draggable handles (≥12 px grab, clamped 0–1); `changed`/`set_points` for the sync.
+- **chunk: `PenTab`** — pen buttons 331/332/329 (read-only if raw); the curve graph + 4 spins; range; Reset; Apply via `apply_pressure`+`checkpoint()`.
+- **chunk: `ProfilesTab`** — the profile menu (search+Enter) + `+` import, the 3×3 grid (Edit Grid: image), Export All, the status line.
+- **chunk: `main`** / **`single_instance`** — `QLocalServer` "wacom-center" (2nd start raises it); detects, `checkpoint()`s, builds tabs.
+
+### `wacom_profiles.py` — profile files, checkpoint and the switch (Qt-free)
+Imported by `wacom_center.py` (a plain top-level `import`: no Qt, no import
+cycle). Owns `${XDG_DATA_HOME:-~/.local/share}/wacom-center/` (`profiles/`,
+`backup/`, `profiles.ini`), `$RD/conf.lock`, and the pressure write path
+(kcminputrc groups + the live D-Bus properties) `wacom_center.py`'s Pen tab
+and this file's own `switch_to` both call.
+- **chunk: `paths`** — profile/backup/conf/kcminputrc paths, the `[Conf]` allowlist (two numbering schemes), the section/key tables.
+- **chunk: `ProfileError`** / **`SwitchStopped`** — a refused `.wcprofile` (never partial values); a switch step that failed.
+- **chunk: `atomic_write`** / **`conf_lock`** — a temp file then `os.replace`; `$RD/conf.lock`, non-blocking, retried 5 s, else `TimeoutError`.
+- **chunk: `save_conf_key`** / **`drop_conf_key`** — the locked, atomic conf surgery `wacom_center.py`'s same-name functions delegate to.
+- **chunk: `poke_daemon`** — one `reload` line into `hover.ctl`; False when nothing reads it.
+- **chunk: `kreadconfig6`** / **`kwriteconfig6`** / **`kwrite_literal`** — generic kcminputrc read/write; `kwriteconfig6` raises on a nonzero exit.
+- **chunk: `busctl_set`** / **`busctl_get`** — the InputDevice's live pressure props; `set` is effect-only, `get` parses the typed reply.
+- **chunk: `toggle_chord`** — the toggle's shortcut from kglobalshortcutsrc; a Qt-free copy of `wacom_center.py`'s function.
+- **chunk: `load_parse_chord`** — `parse_chord` from `tablet-pointer-warp.py`, dynamic import; Qt-free copy of `chord_rules`.
+- **chunk: `pen_groups_in_kcminputrc`** / **`libwacom_sibling_pairs`** — the pen's `[Libinput]` groups; the sibling's group from `DeviceMatch`.
+- **chunk: `apply_pressure`** — the ONE pressure path: kcminputrc per group (creates the sibling's), D-Bus when connected; `switch_to` reuses it.
+- **chunk: `resolve_pad_name`** / **`resolve_pen_name`** / **`_only_group`** — live name, else `profiles.ini`, else the only matching group.
+- **chunk: `_read_ini`** / **`_write_ini`** / **`get_device_ini`** / **`save_device`** — `profiles.ini [Device]`; only a live detection saves it.
+- **chunk: `active_profile_name`** / **`set_active_profile`** — `profiles.ini`'s `[Active]`.
+- **chunk: `get_grid`** / **`set_grid_cell`** — `profiles.ini`'s `[Grid]` 1-9.
+- **chunk: `profile_path`** / **`list_profiles`** — a profile's file path; every profile name on disk, sorted.
+- **chunk: `valid_name`** / **`unique_name`** — refuse empty/`.`/`..`/`/`/NUL, 255 bytes with the extension; "name (2)" for Keep Both.
+- **chunk: `blank_sections`** / **`_render_profile`** / **`write_profile`** — the all-keys skeleton, as fixed-order text, atomically written.
+- **chunk: `backup_now`** — a profile copied to `backup/`, once per window (an explicit Replace; `checkpoint` has its own check).
+- **chunk: `_line_ok`** / **`_as_float`** — the final `[Conf]` line-format gate; a comma-or-dot float parse.
+- **chunk: `_validate_pad_or_pen`** — empty/`Disabled`/`Key,`/`MouseButton,`/`TabletToolButton,` only; warns on a one-letter chord.
+- **chunk: `_validate_curve`** / **`_validate_range`** / **`_validate_png`** — format, 0–1 bounds, min<max, PNG signature, ≤16000 px.
+- **chunk: `_apply_pie_rule`** — a validated `CHORD_n`/`TOUCH_CHORD_n` disables `[Pad]` key n−1, unless on `HOVER_MASK` (dropped instead).
+- **chunk: `read_profile`** — the only `.wcprofile` reader: size/UTF-8 refusal, BOM/CRLF, parsing, every validator, the pie rule.
+- **chunk: `_raw_conf_values`** / **`_live_sections`** — live values: conf raw; kreadconfig6 for Pad/Ring/Pen; Pressure from D-Bus or a group.
+- **chunk: `ensure_first_start`** — first run: "My settings" from the live values, made active, grid cell 1.
+- **chunk: `checkpoint`** — copies live values into the active profile, keeping `[Image]`; backs up on a change; missing = recreated.
+- **chunk: `switch_to`** — `checkpoint`, `read_profile` (stops on error), sync `Disabled` Pad, the conf replace, other keys, pressure, resize, active.
 
 ### `tests/` — the gates
 `run_all.sh` runs everything (~60 s; no Qt, no tablet, no KWin): `py_compile`,
 `bash -n`, `check_map.py`, then `test_script.sh` (the toggle through on, move,
 resize around the centre with the clamp, suspend, resume and off, the run
-lock, the write-back to `kcminputrc` (a bus switch and a logout while ON, a
+lock (heal's pen retry outside it), the write-back to `kcminputrc` (a bus switch and a logout while ON, a
 base set by hand, the ledger fallback), OFF with the tablet gone, pause and
 resume; with a stubbed `busctl` that keeps `outputArea` per product like KWin,
 and a fake overlay), `test_size.sh` (the ring
@@ -274,7 +323,9 @@ with the mode on, the preview only with it off, nothing while the marker is
 fresh; a stub toggle and a fake preview) and `test_hover.py` (the daemon with a named pipe as the
 pad, a fake pen, fake overlays and a fake toggle that logs its modes; the
 `waiting` / `solid` lines; a conf edit mid-rest; HOLD 0; the long press and
-what must not arm it; the heal a node set starts; the pause after the grace). Every rig takes
+what must not arm it; the heal a node set starts; the pause after the grace; a held
+chord and the ghost released when the tablet goes, and its heal on return; a pen
+with no position yet, in the daemon and in `tablet-pen-pos.py`). Every rig takes
 `<scratch dir> <script path>`. `add_markers.py <dir> [out dir]` puts a marker
 above every new def, function or mode (idempotent; block markers are listed
 inside it).

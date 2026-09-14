@@ -62,6 +62,8 @@
 # the geometry of the current mapping is kept in $RD/area for the daemon.
 # Runs are serialized with flock on $RD/lock: two runs never interleave (a
 # long press on the pad key = KWin's MOVE toggle, then the daemon's OFF).
+# heal looks for the pen before it takes the lock: it can wait 2 s for KWin
+# to list a pen that has just appeared, and no key press may wait behind it.
 # The conf is read after the lock and a resize that finds its width already
 # on screen does nothing, so a burst of ring ticks (one process each, every
 # 5 degrees) collapses into two resizes instead of a staircase; the pen's
@@ -93,12 +95,6 @@ IF=org.kde.KWin.InputDevice
 SCR=org.kde.kwin.Scripting
 RD="${XDG_RUNTIME_DIR:-/tmp}/tabprec"
 mkdir -p "$RD"
-exec 9>"$RD/lock"; flock -w 5 9 || exit 1   # one run at a time: a long press makes KWin's MOVE toggle and the daemon's OFF toggle land in a row
-[ -f "$CONF" ] && . "$CONF"   # read AFTER the lock: a ring tick queued behind another applies the newest SCALE, not the one it was born with
-SCALE=${SCALE:-0.36}
-DIM=${DIM:-0.10}
-RECONNECT=${RECONNECT:-60}   # seconds a paused mode waits for the tablet to come back; 0 = never resume
-case "$RECONNECT" in *[!0-9.]*) RECONNECT=60;; esac
 DIR=$(cd "$(dirname "$0")" && pwd)
 STATE="$RD/saved-area"
 FIFO="$RD/overlay.fifo"    # the live overlay reads "X Y W H DIM" lines from it
@@ -302,6 +298,17 @@ unpause() {  # a pause younger than RECONNECT seconds comes back at the SAME are
     return 0
 }
 
+# ── chunk: run-lock
+# heal looks for the pen BEFORE the lock. The daemon starts heal when a tablet appears, and KWin can list
+# the pen up to 2 s later: inside the lock, that wait delayed every key press and froze the daemon's calls.
+[ "$MODE" = heal ] && find_pen
+exec 9>"$RD/lock"; flock -w 5 9 || exit 1   # one run at a time: a long press makes KWin's MOVE toggle and the daemon's OFF toggle land in a row
+[ -f "$CONF" ] && . "$CONF"   # read AFTER the lock: a ring tick queued behind another applies the newest SCALE, not the one it was born with
+SCALE=${SCALE:-0.36}
+DIM=${DIM:-0.10}
+RECONNECT=${RECONNECT:-60}   # seconds a paused mode waits for the tablet to come back; 0 = never resume
+case "$RECONNECT" in *[!0-9.]*) RECONNECT=60;; esac
+
 # OFF must work with the tablet gone: switched off, a flat battery, the cable out with Bluetooth off.
 # Otherwise find_pen exits first, the OFF branch never runs and the overlay stays on the screen with
 # nothing able to close it - the pad key, the keyboard shortcut, Wacom Center and the daemon all come
@@ -310,12 +317,12 @@ unpause() {  # a pause younger than RECONNECT seconds comes back at the SAME are
 [ "$MODE" = resize ] || [ "$MODE" = pause ] || find_pen   # resize looks the pen up only when it has something to apply; pause never does
 case "$MODE" in
 # ── chunk: resize
-resize)    # while ON: the conf's SCALE around the area's own centre (the pen's position only when there is no area on record); a queued tick whose width is already on screen does nothing
+resize)    # while ON: the conf's SCALE around the area's own centre (the pen's position only when there is no area on record); a queued tick whose width AND dim already match the screen does nothing
     if [ -f "$STATE" ]; then
         set -- $(cat "$AREA" 2>/dev/null)
         if [ -n "${7:-}" ]; then
             TARGET_W=$(awk -v s="$SCALE" -v sw="$6" 'BEGIN{ if (s > 0.8) s = 0.8; if (s < 0.05) s = 0.05; printf "%d", int(sw * s + 0.5) }')
-            if [ "$TARGET_W" != "$3" ]; then
+            if [ "$TARGET_W" != "$3" ] || [ "$DIM" != "$5" ]; then
                 CENTRE=$(awk -v x="$1" -v y="$2" -v w="$3" -v h="$4" 'BEGIN{printf "%.1f %.1f", x + w / 2, y + h / 2}')
                 area_math centre $CENTRE "$6" "$7" && apply_area
             fi

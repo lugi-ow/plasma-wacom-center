@@ -1,0 +1,66 @@
+After uninstall, the tablet is mapping to a small area (precision mode)
+A simple rescue procedure
+=======================================================================
+
+plasma-wacom-center, 2026-09-13
+
+
+What happened
+-------------
+
+KDE saves the screen area that the pen maps to, and it uses that area again
+each time the tablet connects. While precision mode is on, the area is a
+small rectangle.
+
+plasma-wacom-center writes the normal area back into KDE's settings file
+every time it changes the area, and uninstall.sh switches precision mode
+off before it removes anything. So a small area after an uninstall is rare.
+It can stay after a version older than 2026-09-13, or when the software
+could not write KDE's settings file.
+
+You do not need plasma-wacom-center installed for these steps.
+
+
+The steps
+---------
+
+1. Switch the tablet off.
+
+2. Disconnect the cable.
+
+3. Open Konsole.
+
+4. Run this command:
+
+       grep -A1 Libinput ~/.config/kcminputrc
+
+   Lines like these appear. Your numbers and your tablet name can differ:
+
+       [Libinput][1386][864][Wacom Intuos Pro M Pen]
+       OutputArea=0.37,0.28,0.26,0.17
+
+   The three values in the square brackets are the maker number, the model
+   number and the tablet name. A tablet has one block for the cable and one
+   for Bluetooth, with different model numbers.
+
+5. For each block that has an OutputArea line, run this command. Put your
+   own maker number, model number and tablet name in it:
+
+       kwriteconfig6 --file kcminputrc --group Libinput --group 1386 --group 864 --group 'Wacom Intuos Pro M Pen' --key OutputArea --delete
+
+   Nothing appears.
+
+6. Run the command from step 4 again. No OutputArea line appears now.
+
+7. Remove the record that plasma-wacom-center keeps:
+
+       rm -rf ~/.local/state/tabprec
+
+8. Switch the tablet on.
+
+9. Move the pen to the four corners of the tablet. The cursor goes to the
+   four corners of the screen.
+
+Step 5 removes the area completely. An empty area and the full screen are
+the same thing to KDE. If you set your own tablet area in System Settings
+before, set it again there.

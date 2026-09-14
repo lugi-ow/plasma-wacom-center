@@ -1,0 +1,17 @@
+[ButtonRebinds][Tablet][Wacom Intuos Pro M Pad]
+1=Disabled
+2=Key,Space
+3=Disabled
+4=Key,Shift
+5=Key,Control
+6=Key,Alt
+7=Key,Meta+Shift+F12
+
+[ButtonRebinds][TabletRing][Wacom Intuos Pro M Pad][0]
+0=AxisKey,Meta+Shift+F10,Meta+Shift+F9,120
+
+[Libinput][1386][855][Wacom Intuos Pro M Pen]
+OutputArea=0,0,1,1
+
+[Libinput][1386][864][Wacom Intuos Pro M Pen]
+OutputArea=0,0,1,1

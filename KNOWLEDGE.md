@@ -76,7 +76,11 @@ registered with the daemon (`doRegister` + `setForeignShortcut` on
 After a relogin the daemon rebuilds everything from `kglobalshortcutsrc`.
 That relogin is not optional. A launcher registered during the session holds
 its key at once, but the key starts nothing until the next login (Plasma 6.6,
-measured 2026-09-12).
+measured 2026-09-12). The reverse, `unregister(component, "_launch")` on
+`org.kde.KGlobalAccel`, frees the key in the running daemon at once. The
+daemon keeps the entry's group in `kglobalshortcutsrc`, so delete its keys as
+well. At login the daemon skips an entry whose `.desktop` file is gone
+(kglobalacceld source, read 2026-09-13).
 
 **Ring bindings** live in `kcminputrc` as
 `[ButtonRebinds][TabletRing][<pad device name>][<mode>]` with
@@ -94,6 +98,17 @@ best first: the kernel's evdev state (`EVIOCGABS`, always fresh while the
 pen is in proximity - needs the udev `uaccess` rule), and XWayland's stylus
 device (XInput2 valuators in desktop coordinates - fresh only while the pen
 hovers an X11 window).
+
+**A lifted pen has no evdev position.** The kernel (`wacom_exit_report`)
+zeroes the pen's X, Y and tool key whenever it leaves proximity, so a node
+whose pen was just lifted away reads identically to one that has not
+reported yet: `EVIOCGABS` returns the minimum on both axes with
+`BTN_TOOL_PEN` clear (`EVIOCGKEY`). Taken as a position, it put the
+precision area, the ghost and the mouse warp in the top-left corner (seen on
+the hardware, 2026-09-12); both readers now treat that state as no position
+at all (`OUT_OF_RANGE`) and fall back to the mouse. Find the pen node by
+that same key bit in `/proc/bus/input/devices`, never by a name substring: "pen" is also in
+"Suspend".
 
 **The mouse pointer and the pen cursor are two different things.** KWin
 keeps a pointer position for the mouse and a separate cursor for the
@@ -153,7 +168,23 @@ the raw reports from `/dev/hidraw*` next to the kernel driver
 **Overlays that must not eat input**: a Qt window with
 `Qt.WindowTransparentForInput` on the layer-shell overlay layer
 (`org.kde.layershell` QML module) covers the screen, stays click-through,
-and survives everything except its own process exit.
+and survives everything except its own process exit. The module is the
+package `qml6-module-org-kde-layershell`, and a Plasma desktop does not
+always pull it in: on Kubuntu 26.04 only `plasma-keyboard` depends on it
+(`apt-cache rdepends --installed`, 2026-09-13). Without it the overlay
+process exits at load, after the pen mapping has already changed.
+
+**A layer-shell window's scope sets its KWin window type.** KWin 6.6 maps
+the scope to a type (`desktop`, `dock`, `notification`, `tooltip`,
+`on-screen-display`, `dialog`, `splash`, `utility`). Any other scope is a
+normal window, and layer-shell-qt's default scope is `window`. A normal
+window that appears ends Peek at Desktop (`Meta+D`), so every hidden window
+comes back, and Peek at Desktop hides the window itself. KWin exempts docks
+(`Workspace::breaksShowingDesktop`), so the overlay sets `scope: "dock"`, the
+type Plasma's panels use. Measured in a headless nested KWin 6.6.6 on
+2026-09-13: with Peek at Desktop on, the overlay started. Without the scope,
+KWin typed it `normal=true` and Peek at Desktop turned off. With `dock`, it
+was `dock=true` and Peek at Desktop stayed on.
 
 **Moving a running overlay from other processes**: give it a named pipe
 and open the pipe `O_RDWR | O_NONBLOCK` on the reading side. A read-only

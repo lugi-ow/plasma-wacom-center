@@ -14,7 +14,7 @@ mkdir -p "$BIN" "$APPS"
 install -m 755 tablet-precision.sh tablet-precision-size.sh \
     tablet-pen-pos.py tablet-overlay.py tablet-size-preview.py \
     tablet-pointer-warp.py tablet-hover.py tablet-pad-probe.py \
-    wacom_center.py "$BIN/"
+    wacom_center.py wacom_profiles.py "$BIN/"
 install -m 644 tablet-overlay.qml "$BIN/"
 rm -f "$BIN/tablet-size-preview.qml"    # retired: the size preview draws with tablet-overlay.qml
 
@@ -93,6 +93,16 @@ fi
 qdbus6 org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
 
 echo "== 5/5 Manual steps that need you"
+QML=$(python3 -c 'import PyQt6.QtQuick; from PyQt6.QtCore import QLibraryInfo as L; print(L.path(L.LibraryPath.QmlImportsPath))' 2>/dev/null) || QML=""
+if [ -z "$QML" ] || [ ! -d "$QML/org/kde/layershell" ]; then   # the overlay imports org.kde.layershell: without it the pen is mapped and nothing is drawn
+    cat <<'EOF'
+
+0. Install the missing packages first. Without them the overlay cannot start:
+   precision mode would still change the pen area, but draw nothing.
+
+   sudo apt install python3-pyqt6 python3-pyqt6.qtquick qml6-module-org-kde-layershell
+EOF
+fi
 cat <<'EOF'
 
 A. One permission rule (one sudo, once). It lets the scripts read the pen's
@@ -116,8 +126,8 @@ B. Bind the pad buttons in Wacom Center (the Pad buttons tab):
    Use only F-keys and modifiers in pad chords - letters silently fail
    under non-Latin keyboard layouts.
 
-C. If the shortcuts do not fire yet, log out and back in once - the shortcut
-   daemon then rebuilds every entry from its config file.
+C. Log out and back in once. Until then, the new shortcuts start nothing:
+   the shortcut daemon loads their commands only at login.
 
 D. ExpressKey touch preview - a ghost of the precision area while a finger
    RESTS on the precision key, before the press. Wacom Intuos Pro (2017 or

@@ -21,6 +21,10 @@ Window {
     color: "transparent"
     flags: Qt.FramelessWindowHint | Qt.WindowTransparentForInput | Qt.WindowStaysOnTopHint
 
+    // KWin types a layer-shell window by its scope. The default scope, "window", makes it a normal window:
+    // its appearance ends Peek at Desktop (every window comes back), and Peek at Desktop hides it while
+    // precision mode stays on. A dock does neither (KWin 6.6, Workspace::breaksShowingDesktop).
+    LayerShell.Window.scope: "dock"
     LayerShell.Window.layer: LayerShell.Window.LayerOverlay
     LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom
                              | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight

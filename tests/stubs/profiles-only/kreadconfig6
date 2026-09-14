@@ -1,0 +1,16 @@
+#!/bin/bash
+# Stub kreadconfig6 for test_profiles.py ONLY (this dir is not on any other
+# rig's PATH): logs the call, then runs the real binary so a scratch
+# kcminputrc reads exactly like the live one. Finds "real" by skipping any
+# PATH entry that holds a same-named stub, so it never re-execs itself.
+echo "kreadconfig6 $*" >> "${STUB_LOG:-/dev/stderr}"
+HERE=$(cd "$(dirname "$0")" && pwd)
+REAL=""
+IFS=:
+for d in $PATH; do
+    [ "$d" = "$HERE" ] && continue
+    if [ -x "$d/kreadconfig6" ]; then REAL="$d/kreadconfig6"; break; fi
+done
+unset IFS
+[ -n "$REAL" ] || { echo "kreadconfig6 stub: no real binary on PATH" >&2; exit 1; }
+exec "$REAL" "$@"

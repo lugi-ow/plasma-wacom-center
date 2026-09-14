@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stub qdbus6 for test_profiles.py: the switch must never call this
+# (F2 H6 - reconfigure re-reads kwinrc only). Just logs and exits 0.
+echo "qdbus6 $*" >> "${STUB_LOG:-/dev/stderr}"
+exit 0

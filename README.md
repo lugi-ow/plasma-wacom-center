@@ -56,11 +56,13 @@ Wacom Center. Left, the Precision tab. Right, the Pad buttons tab.
 
 - KDE Plasma 6.5 or newer, on Wayland. This project does not work on X11.
   On X11, use `xsetwacom` instead.
-- Two Python packages. Everything else is part of a standard Plasma desktop.
+- Three packages: two for Python and one for the overlay. Some Plasma
+  installs do not include the overlay package. Without it, precision mode
+  still changes the pen area, but no border and no dim appear.
 - [Kando](https://kando.menu), if you want the pie menu.
 
 ```
-sudo apt install python3-pyqt6 python3-pyqt6.qtquick
+sudo apt install python3-pyqt6 python3-pyqt6.qtquick qml6-module-org-kde-layershell
 ```
 
 ## Install
@@ -136,6 +138,57 @@ ring's four modes, the Pie keys column (one tick per side), and the
 Precision column that names the precision key. Hover a column title for
 the explanation.
 
+## Pen
+
+Wacom Center has a Pen tab. It sets the pen's three buttons, its
+pressure curve, and its pressure range.
+
+Pen button 1 and Pen button 2 work like the boxes in the Pad buttons
+tab. Type a shortcut, leave the box empty, or type "Disabled". Pen
+button 3 needs both of the pen's side buttons pressed together, and it
+only works over a USB connection. Some pens have no third button.
+
+A box already set in System Settings turns read-only, with a note that
+tells you where to change it. Wacom Center never clears a binding it
+did not set.
+
+The pressure curve is a small graph with two handles you drag, like
+the one in System Settings' Drawing Tablet page. Four number fields
+next to the graph show the same two points. Drag the graph to change
+the numbers, or type a number to move the graph. Click "Reset
+Pressure" to get a straight line back.
+
+Two more fields set the lowest and the highest pressure the pen uses.
+Click "Apply" to save the tab.
+
+The tab works even with the pen disconnected. Set your bindings and
+your curve now. They take effect once the pen connects.
+
+## Profiles
+
+A profile is a saved copy of every setting on the Precision, Pad
+buttons, and Pen tabs. Pie menus stay in Kando, so they are not part
+of a profile.
+
+The Profiles tab is the last tab in Wacom Center. A button at the top
+names the profile you use now. Click it to open a list. Type to
+search, or click a profile in the list to switch to it. A "+" button
+next to it adds a profile from a file on disk.
+
+Below the button is a grid of nine cells. A filled cell shows a
+profile's picture and name. Click a filled cell to switch to that
+profile at once. A dashed cell is empty. Click "Edit Grid" to fill a
+cell, remove a picture, or add one.
+
+Click "Export All Current Settings as Profile..." to save your
+current setup as a new profile file. Use it to back up your settings,
+share them, or start a new profile from where you are.
+
+Switching profiles is instant. It never turns precision mode on or
+off by itself. Wacom Center keeps one backup of a profile the first
+time you change it in a session, so you can undo a mistake. Your
+profiles survive an uninstall.
+
 ## Pie menu
 
 Plasma has no pie menus. [Kando](https://kando.menu) adds them, and it
@@ -160,68 +213,14 @@ a shortcut made of F-keys and modifiers, and use each one once.
 - Keep the tablet mapped to the full screen in System Settings. With a
   custom mapping, precision mode still turns off correctly, but the area
   can land away from the cursor.
-- After a Bluetooth reconnect, hover the pen over the tablet once before
-  you turn precision mode on. Otherwise the area lands in the top-left
-  corner.
+- Right after the tablet connects, the toolkit does not know where the pen
+  is until you hover the pen over the tablet. If you turn precision mode on
+  before that, the area lands around the mouse pointer.
 - The touch preview, the touch chords and the area drag need pad keys with
   a touch sensor (Wacom Intuos Pro, Cintiq Pro, MobileStudio Pro). On other
   tablets the toggle, the ring and the pie menu still work.
 - A pen click does not move the focus to another window. This is a Plasma
   6.6 bug (KDE bug 498386), not something this project can fix.
-
-## If the pen only reaches a small part of the screen
-
-Precision mode maps the pen to a small rectangle. KDE keeps that rectangle
-and uses it again each time the tablet connects. The rectangle stays if the
-daemon stops while precision mode is on. The rectangle also stays if you
-remove this software while precision mode is on.
-
-These steps give the pen the whole screen again. You do not need this
-software installed to do them.
-
-1. Switch the tablet off.
-2. Disconnect the cable.
-3. Open Konsole.
-4. Run this command:
-
-   ```bash
-   grep -A1 Libinput ~/.config/kcminputrc
-   ```
-
-   Lines like these appear. Your numbers and your tablet name can differ:
-
-   ```
-   [Libinput][1386][864][Wacom Intuos Pro M Pen]
-   OutputArea=0.37,0.28,0.26,0.17
-   ```
-
-   The three values in the square brackets are the maker number, the model
-   number and the tablet name. A tablet has one block for the cable and one
-   for Bluetooth, with different model numbers.
-
-5. For each block that has an `OutputArea` line, run this command. Put your
-   own maker number, model number and tablet name in it:
-
-   ```bash
-   kwriteconfig6 --file kcminputrc --group Libinput --group 1386 --group 864 --group 'Wacom Intuos Pro M Pen' --key OutputArea --delete
-   ```
-
-   Nothing appears.
-
-6. Run the command in step 4 again. No `OutputArea` line appears now.
-7. Remove the record this software keeps:
-
-   ```bash
-   rm -rf ~/.local/state/tabprec
-   ```
-
-8. Switch the tablet on.
-9. Move the pen to the four corners of the tablet. The cursor goes to the
-   four corners of the screen.
-
-Step 5 removes the mapping completely. An empty mapping and the full screen
-are the same thing to KDE. If you set your own tablet area in System Settings
-before, set it again there.
 
 ## Uninstall
 
@@ -239,13 +238,15 @@ It stops the daemon and removes what the install put on your system:
 - the scripts, from `~/.local/bin`
 - the launcher entries, from `~/.local/share/applications`
 - the autostart entry, from `~/.config/autostart`
-- their shortcut entries in KDE's shortcut config
+- their shortcuts, from KDE's shortcut service and its config file
 
 Your settings stay in `~/.config/tabprec.conf`; the script prints that
 path and the one `sudo` line that removes the permission rule from
 `/etc/udev/rules.d`. Log out and back in once to finish. If you deleted
 the cloned folder, clone it again for the script — or remove the files
 from the folders above by hand.
+
+[After uninstall, the tablet is mapping to a small area (precision mode) - a simple rescue procedure.](RESCUE.txt)
 
 ## For contributors and AI agents
 
