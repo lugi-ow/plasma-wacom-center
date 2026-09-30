@@ -59,6 +59,11 @@ check "6 up from 0.79 twice: clamped at 0.8000"   'grep -qx "SCALE=0.8000" "$CON
 sed -i 's/^SCALE=.*/SCALE=0.06/' "$CONF"; "$T" down; "$T" down; sleep 0.3
 check "6 down from 0.06 twice: clamped at 0.0500" 'grep -qx "SCALE=0.0500" "$CONF"'
 check "6 DIM still kept"                      'grep -qx "DIM=0.10" "$CONF"'
+echo 'SCALE_MAX=0' >> "$CONF"; sed -i 's/^SCALE=.*/SCALE=0.79/' "$CONF"; "$T" up; "$T" up; sleep 0.3
+check "6 SCALE_MAX=0: no cap, up from 0.79 twice -> 0.8300" 'grep -qx "SCALE=0.8300" "$CONF"'
+sed -i 's/^SCALE_MAX=.*/SCALE_MIN=0.20/' "$CONF"; sed -i 's/^SCALE=.*/SCALE=0.21/' "$CONF"; "$T" down; "$T" down; sleep 0.3
+check "6 SCALE_MIN=0.20: down from 0.21 twice stops at 0.2000" 'grep -qx "SCALE=0.2000" "$CONF"'
+sed -i '/^SCALE_MIN=/d' "$CONF"
 
 # 7: RING_STEP from the conf: 5 points per tick, then half a point; the line itself is kept
 printf 'SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nRING_STEP=5\n' > "$CONF"

@@ -1,89 +1,6 @@
 #!/bin/bash
-# tablet-precision.sh - drawing-tablet "precision mode" toggle for KDE Plasma 6
-# on Wayland. Part of plasma-wacom-center (MIT).
-#
-# Usage: tablet-precision.sh [toggle|resize|where|suspend|resume|heal|pause]   (default: toggle)
-#
-# toggle ON:  maps the pen to a TABLET-SHAPED rectangle (width = SCALE of the
-#      screen, height follows the tablet's own aspect ratio, so there is no
-#      stretch inside the area), placed so the cursor DOES NOT MOVE:
-#      rect = norm * (screen - rect), the rule Wacom's Windows driver uses -
-#      the area drifts toward a border slower than the cursor and can never
-#      leave the screen. Pen position comes from tablet-pen-pos.py; the mouse
-#      cursor is the fallback. A click-through overlay dims everything
-#      OUTSIDE the mapped rectangle (tablet-overlay.py + .qml).
-# toggle OFF: restores the mapping that was active before ON (not blindly
-#      full screen). Toggle state = the state file, not the area value.
-# toggle while ON with a FRESH relocate marker ($RD/relocate, under 3 s
-#      old): a MOVE, not OFF - re-map at the pen's current position, the
-#      saved base mapping stays. tablet-hover.py keeps the marker fresh while
-#      it drags the live overlay after the pen (finger held on the key), so
-#      the press that ends the drag lands the area where the overlay is.
-# resize: while ON, the area takes the SCALE from the conf around ITS OWN
-#      CENTRE, clamped to the screen (the ring size control calls this): the
-#      area does not move, the base mapping saved at ON is kept. The cursor
-#      scales with the area - the pen's place IN the area is what stays put,
-#      not its place on the screen. No-op when OFF.
-# where:  print "X Y W H DIM SW SH" - the rectangle a toggle ON would map right now,
-#      nothing changed (tablet-hover.py draws the ghost from it).
-# suspend / resume: while ON, put the base mapping back for the moment /
-#      re-map the area on record - tablet-hover.py brackets a relocation with
-#      them, so the cursor roams the whole screen while the area is aimed and
-#      returns to the old area on a cancel (a confirm re-maps through toggle).
-# heal:   tablet-hover.py runs it whenever a tablet appears (a connect, a
-#      wake, a bus switch, its own start). ON: the pen that turned up takes
-#      the area on record, so the mode survives a cable swap. OFF: a recent
-#      pause resumes (see pause); otherwise nothing to do - see below.
-# pause WHEN: tablet-hover.py runs it when the tablet has been GONE for its
-#      grace (10 s) with the mode ON - switched off, a flat battery. It ends
-#      the mode here without a pen, so no rectangle stays drawn with no
-#      tablet, and keeps the area in $RD/paused. heal, or the key, within the
-#      conf's RECONNECT seconds of WHEN resumes it at the SAME area; later, or
-#      with RECONNECT=0, the record is dropped. $RD dies at logout, so a crash
-#      never leaves a pause behind.
-#
-# KWin writes every outputArea it is given straight into kcminputrc, under
-# [Libinput][vendor][product][name], and loads it again whenever that device
-# appears. Over USB and over Bluetooth the tablet is two devices there. A
-# precision rectangle would therefore outlive an unplug, a bus switch, a
-# logout and a crash, while the only note saying it was temporary lives in
-# $XDG_RUNTIME_DIR and dies with the session. So every RECTANGLE write goes
-# through map_area, which writes the BASE back to kcminputrc at once
-# (unpersist) and reads it back to prove it: the rectangle exists only in
-# KWin's memory, and the file always names the mapping the pen must have
-# with the mode OFF. Measured on Plasma 6.6, 2026-09-12: the write-back does
-# not disturb the live mapping, and the pen stays in the rectangle.
-#      The ledger, $XDG_STATE_HOME/tabprec/<vendor>-<product> (default
-#      ~/.local/state), is now only a fallback: map_area writes one when the
-#      write-back cannot be proved, and heal OFF repairs from it as before.
-#
-# The overlay is spawned once per ON with --fifo $RD/overlay.fifo and then
-# MOVED through that pipe on a resize or a move (no respawn, no flicker);
-# the geometry of the current mapping is kept in $RD/area for the daemon.
-# Runs are serialized with flock on $RD/lock: two runs never interleave (a
-# long press on the pad key = KWin's MOVE toggle, then the daemon's OFF).
-# heal looks for the pen before it takes the lock: it can wait 2 s for KWin
-# to list a pen that has just appeared, and no key press may wait behind it.
-# The conf is read after the lock and a resize that finds its width already
-# on screen does nothing, so a burst of ring ticks (one process each, every
-# 5 degrees) collapses into two resizes instead of a staircase; the pen's
-# sysname is cached in $RD/pen (one D-Bus call to confirm it per run, not
-# one per device).
-#
-# Config: ~/.config/tabprec.conf - SCALE (0.05-0.80 of screen width), DIM
-# (0-0.8). Wacom Center and tablet-precision-size.sh write it. Silent by
-# design: the overlay is the feedback; only errors notify.
-#
-# Devices are found by capability (tabletTool property), not by name, and
-# looked up on every run - Bluetooth reconnects renumber the event nodes.
-#
-# Assumption: the base mapping is the default full-tablet stretch. If you set
-# a letterboxed mapping on the Display page, the cursor-stationary math needs
-# the inputArea transform added.
-#
-# Bind the toggle to a pad button through chords built from F-KEYS AND
-# MODIFIERS ONLY: KWin's rebind injector resolves letters through the active
-# keyboard layout, so letter chords die silently under any non-Latin layout.
+# tablet-precision.sh [toggle|resize|where|suspend|resume|heal|pause] - precision mode on Plasma 6 Wayland; the only writer of the pen mapping.
+# Part of plasma-wacom-center (MIT). Structure and contracts: PROJECT_MAP.md; mechanisms: TECHNICAL.md.
 
 # ── chunk: config-and-paths
 export LC_ALL=C.UTF-8    # decimal point regardless of locale; UTF-8 keeps Qt quiet
@@ -110,7 +27,9 @@ PEN_OPTIONAL=""                  # set for OFF: the tablet may be gone, and OFF 
 TRIES=0
 
 # ── chunk: note
-note() { notify-send -a Tablet -i input-tablet -t 1800 "Precision mode" "$1" 2>/dev/null; }
+note() {  # silent by design: the overlay is the feedback, only errors notify
+    notify-send -a Tablet -i input-tablet -t 1800 "Precision mode" "$1" 2>/dev/null
+}
 # ── chunk: kload
 kload() { qdbus6 $KW /Scripting $SCR.unloadScript "$2" >/dev/null 2>&1
           qdbus6 $KW /Scripting $SCR.loadScript "$1" "$2" >/dev/null &&
@@ -144,15 +63,17 @@ find_pen() {  # the pen's KWin sysname into $pen: the cached one when KWin still
 
 # ── chunk: area_math
 area_math() {  # W H X Y (px) and FX FY FW FH (fractions) for SCALE and the tablet's aspect. $1 = "pen": placed around the pen at $2 $3 so the cursor stays put; "centre": centred on $2 $3, clamped to the screen. $4 $5 = the screen size.
+              # Assumes the base mapping is the full-tablet stretch: a letterboxed mapping needs the inputArea transform added.
     find_pen
     CX=$2 CY=$3 SW=$4 SH=$5
     TABSIZE=$(busctl --user get-property $KW $MGR/$pen $IF size 2>/dev/null | cut -d' ' -f2-)
     read -r W H X Y FX FY FW FH <<EOF
-$(awk -v mode="$1" -v s="$SCALE" -v cx="$CX" -v cy="$CY" -v sw="$SW" -v sh="$SH" -v tab="${TABSIZE:-16 10}" 'BEGIN{
+$(awk -v mode="$1" -v s="$SCALE" -v lo="$SCALE_MIN" -v hi="$SCALE_MAX" -v cx="$CX" -v cy="$CY" -v sw="$SW" -v sh="$SH" -v tab="${TABSIZE:-16 10}" 'BEGIN{
     split(tab, t, " "); aspect = (t[2] > 0) ? t[1] / t[2] : 1.6;
-    if (s > 0.8) s = 0.8; if (s < 0.05) s = 0.05;
-    w = int(sw * s + 0.5); h = int(w / aspect + 0.5);
+    '"$CAP"'
+    w = int(sw * s + 0.5); if (w < 1) w = 1; h = int(w / aspect + 0.5);
     if (h > sh) { h = sh; w = int(h * aspect + 0.5) }
+    if (h < 1) h = 1;
     if (mode == "centre") {
         x = int(cx - w / 2 + 0.5); y = int(cy - h / 2 + 0.5);
         if (x > sw - w) x = sw - w; if (y > sh - h) y = sh - h;
@@ -306,6 +227,11 @@ exec 9>"$RD/lock"; flock -w 5 9 || exit 1   # one run at a time: a long press ma
 [ -f "$CONF" ] && . "$CONF"   # read AFTER the lock: a ring tick queued behind another applies the newest SCALE, not the one it was born with
 SCALE=${SCALE:-0.36}
 DIM=${DIM:-0.10}
+# The soft cap on SCALE (Wacom Center's two size-limit fields): 0 = no cap on that side. Without one the
+# area still ends at the full screen width and at one pixel - a wider or an empty area maps nothing.
+case "${SCALE_MIN:-}" in ""|*[!0-9.]*) SCALE_MIN=0.05;; esac
+case "${SCALE_MAX:-}" in ""|*[!0-9.]*) SCALE_MAX=0.80;; esac
+CAP='if (hi + 0 > 0 && s > hi) s = hi; if (lo + 0 > 0 && s < lo) s = lo; if (s > 1) s = 1;'
 RECONNECT=${RECONNECT:-60}   # seconds a paused mode waits for the tablet to come back; 0 = never resume
 case "$RECONNECT" in *[!0-9.]*) RECONNECT=60;; esac
 
@@ -317,11 +243,11 @@ case "$RECONNECT" in *[!0-9.]*) RECONNECT=60;; esac
 [ "$MODE" = resize ] || [ "$MODE" = pause ] || find_pen   # resize looks the pen up only when it has something to apply; pause never does
 case "$MODE" in
 # ── chunk: resize
-resize)    # while ON: the conf's SCALE around the area's own centre (the pen's position only when there is no area on record); a queued tick whose width AND dim already match the screen does nothing
+resize)    # while ON: the conf's SCALE around the area's own centre (the pen's position only when there is no area on record); a queued tick whose width AND dim already match the screen does nothing, so a burst of ticks is two resizes, not a staircase. The cursor scales with the area: the pen's place IN the area stays, not its place on the screen
     if [ -f "$STATE" ]; then
         set -- $(cat "$AREA" 2>/dev/null)
         if [ -n "${7:-}" ]; then
-            TARGET_W=$(awk -v s="$SCALE" -v sw="$6" 'BEGIN{ if (s > 0.8) s = 0.8; if (s < 0.05) s = 0.05; printf "%d", int(sw * s + 0.5) }')
+            TARGET_W=$(awk -v s="$SCALE" -v lo="$SCALE_MIN" -v hi="$SCALE_MAX" -v sw="$6" 'BEGIN{ '"$CAP"' w = int(sw * s + 0.5); if (w < 1) w = 1; printf "%d", w }')
             if [ "$TARGET_W" != "$3" ] || [ "$DIM" != "$5" ]; then
                 CENTRE=$(awk -v x="$1" -v y="$2" -v w="$3" -v h="$4" 'BEGIN{printf "%.1f %.1f", x + w / 2, y + h / 2}')
                 area_math centre $CENTRE "$6" "$7" && apply_area
@@ -332,7 +258,7 @@ resize)    # while ON: the conf's SCALE around the area's own centre (the pen's 
     fi
     ;;
 # ── chunk: where
-where)
+where)     # prints "X Y W H DIM SW SH"; nothing changes
     compute_area && echo "$X $Y $W $H $DIM $SW $SH"
     ;;
 # ── chunk: suspend

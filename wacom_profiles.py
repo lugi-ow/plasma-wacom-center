@@ -32,7 +32,7 @@ CURVE_RE = re.compile(r"^([0-9.]+,[0-9.]+;){2}$")
 
 # [Pad] keys = 0-based libinput pad button numbers; [Pen] keys = evdev codes (331/332/329).
 # Same file shape, two different numbering schemes - do not "fix" one to match the other.
-CONF_KEYS = (["SCALE", "DIM", "HOLD", "LONG", "RING_STEP", "RECONNECT", "HOVER_MASK"]
+CONF_KEYS = (["SCALE", "SCALE_MIN", "SCALE_MAX", "DIM", "HOLD", "LONG", "RING_STEP", "RECONNECT", "HOVER_MASK"]
              + [f"CHORD_{i}" for i in range(1, 9)]
              + [f"TOUCH_CHORD_{i}" for i in range(1, 9)]
              + [f"TOUCH_HOLD_{i}" for i in range(1, 9)])
@@ -709,8 +709,8 @@ def read_profile(path):
             continue
         sections["Conf"][key] = cleaned
         num = float(cleaned)
-        if key == "SCALE" and not (0.05 <= num <= 0.80):
-            warnings.append(f"SCALE={cleaned} is outside the usual 0.05-0.80 range")
+        if key == "SCALE" and not (0 < num <= 1):
+            warnings.append(f"SCALE={cleaned} is outside 0-1 of the screen width")
         if key == "DIM" and num > 0.8:
             warnings.append(f"DIM={cleaned} is above the usual 0.8")
 

@@ -1,32 +1,6 @@
 #!/usr/bin/env python3
-# tablet-pen-pos.py [--mapped] - print "X Y SCREEN_W SCREEN_H" (px) for the
-# tablet pen. Part of plasma-wacom-center (MIT).
-#
-# Three sources, best first:
-# 1. Kernel evdev state of the pen node (EVIOCGABS): always current whenever
-#    the pen is in proximity, regardless of which window it hovers. Needs
-#    read access to /dev/input/event* - grant once with the udev uaccess
-#    rule printed by install.sh. The pen node is the device that can report
-#    BTN_TOOL_PEN, whatever its name. The kernel (wacom_exit_report) zeroes
-#    the pen's X, Y and tool key whenever it leaves proximity, so a lifted
-#    pen has no evdev position - it reads the minimum on both axes, same as
-#    a node that has not reported yet. The script exits 1 at once for that:
-#    XWayland's stylus data is older still.
-# 2. XWayland's stylus device (XInput2 via ctypes): fresh only while the pen
-#    hovers an X11 window (Krita, GIMP, Blender); stale over native Wayland
-#    windows.
-# 3. Neither -> exit 1; the caller falls back to the mouse cursor.
-#
-# Evdev tells where the pen is ON THE TABLET, which is where it is on the
-# screen only while the whole tablet is mapped to the whole screen. --mapped
-# puts that through the pen's live outputArea - the rectangle precision mode
-# maps it to - so the caller gets the pixel the pen cursor is really on. Plain,
-# the raw full-tablet -> full-screen stretch is printed: that is what the
-# cursor-stationary math in tablet-precision.sh works in. XWayland already
-# reports the mapped position (its valuators are the screen scaled into
-# 0..262143), so --mapped leaves that source alone. An inputArea other than
-# 0,0,1,1 (a cropped tablet) is not handled.
-# DEBUG=1 traces sources and raw axis values.
+# tablet-pen-pos.py [--mapped] - print "X Y SCREEN_W SCREEN_H" (physical px) for the tablet pen; exit 1 = no position.
+# Part of plasma-wacom-center (MIT). Structure and contracts: PROJECT_MAP.md; mechanisms: TECHNICAL.md.
 import ctypes as C
 import fcntl
 import os
@@ -172,6 +146,7 @@ def xwayland_stylus_norm(dpy):
 def output_area():
     """The pen's KWin outputArea as (fx, fy, fw, fh) fractions, or None.
 
+    An inputArea other than 0,0,1,1 (a cropped tablet) is not handled.
     Precision mode maps the pen to a rectangle of the screen and keeps it on
     the device as outputArea, so a tablet position n lands at fx + n * fw. The
     sysname comes from the cache tablet-precision.sh writes on every run that

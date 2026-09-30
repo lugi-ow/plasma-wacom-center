@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
-# Dim-around overlay for tablet precision mode (Plasma 6 Wayland).
-# Usage: tablet-overlay.py X Y W H [DIM] [--waiting] [--follow | --fifo PATH]
-# Draws dim bands around a clear rectangle plus a thin inset border, on the
-# compositor overlay layer, click-through: the look of precision mode
-# itself (tablet-overlay.qml). Killed by tablet-precision.sh.
-# --waiting: the border is dashed and flows clockwise - this rectangle is a
-# preview, waiting to be activated (the ghost tablet-hover.py shows while a
-# finger rests on the precision key). A running overlay switches the look
-# with the lines "waiting" and "solid" (tablet-hover.py does, around a drag).
-# --follow: read lines from stdin and move the rectangle live (the ghost
-# follows the pen). The overlay quits by itself when stdin closes.
-# --fifo PATH: the same lines from a named pipe, created here, that ANY
-# process may write: tablet-precision.sh moves the live overlay on a resize
-# or a relocation instead of respawning it, tablet-hover.py drags it along
-# with the pen while a relocation is being aimed. The pipe is held open for
-# reading AND writing, so writers may come and go and the overlay never
-# quits on its own.
-# Lines: "X Y W H [DIM]" moves the rectangle, "waiting" / "solid" switch the
-# border; each line is applied in order, so the newest wins. Anything else
-# is ignored.
+# tablet-overlay.py X Y W H [DIM] [--waiting] [--follow | --fifo PATH] - the dim-around overlay of precision mode.
+# Part of plasma-wacom-center (MIT). Structure and contracts: PROJECT_MAP.md; mechanisms: TECHNICAL.md.
 import os
 import stat
 import sys
@@ -105,7 +87,7 @@ if follow or fifo:
                 root.setProperty("waiting", parts == [b"waiting"])
                 continue
             if len(parts) not in (4, 5):
-                continue
+                continue                   # anything else is ignored
             try:
                 values = [int(p) for p in parts[:4]]
                 dim = float(parts[4]) if len(parts) == 5 else None

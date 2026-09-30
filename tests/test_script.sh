@@ -260,5 +260,15 @@ check "16 DIM-only change still applies the area again" \
     '[ "$(sets)" -gt "'"$sets_before_dim"'" ] && [ "$(wc -l < "$FAKE_LOG")" -gt "'"$n_before_dim"'" ] && tail -1 "$FAKE_LOG" | grep -q " 0.33$"'
 "$T" toggle; sleep 0.4
 
+# 17: the soft cap on SCALE (conf SCALE_MIN / SCALE_MAX, defaults 0.05 / 0.80; 0 = no cap on that side).
+#     `where` prints the rectangle and changes nothing. 0.95 of 2560 = 2432 wide would be 1607 high:
+#     the screen height ends it at 2179 x 1440. A SCALE near 0 with no floor is one pixel, never empty.
+sed -i 's/^SCALE=.*/SCALE=0.95/' "$S/conf/tabprec.conf"
+check "17 no cap keys: 0.95 stops at the default 0.80 -> 2048 x 1353" '[ "$("$T" where | cut -d" " -f3,4)" = "2048 1353" ]'
+echo 'SCALE_MAX=0' >> "$S/conf/tabprec.conf"
+check "17 SCALE_MAX=0: no cap, the screen height ends it -> 2179 x 1440" '[ "$("$T" where | cut -d" " -f3,4)" = "2179 1440" ]'
+sed -i 's/^SCALE=.*/SCALE=0.0001/' "$S/conf/tabprec.conf"; echo 'SCALE_MIN=0' >> "$S/conf/tabprec.conf"
+check "17 SCALE_MIN=0: no floor, one pixel is the least -> 1 x 1" '[ "$("$T" where | cut -d" " -f3,4)" = "1 1" ]'
+
 echo "failures: $FAILS"
 [ "$FAILS" -eq 0 ]

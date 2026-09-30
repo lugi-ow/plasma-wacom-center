@@ -66,7 +66,11 @@ end the mode, and KWin does not write its own copy back over it.
 `heal` still runs whenever the daemon opens the tablet's nodes. With the mode
 on it maps the pen that turned up to the area on record, so a tablet that
 changes connection stays in precision mode. With the mode off there is
-normally nothing to do.
+normally nothing to do. The daemon runs one `heal` at a time. A `heal` that
+exits non-zero (KWin did not list the pen within 2 s, the lock, a failed
+mapping write) is started again at the next 2 s rescan, 5 runs for each
+appearance of the tablet, and each failure is a `heal failed` line in the
+journal.
 
 The pen ledger, `~/.local/state/tabprec/<vendor>-<product>`, remains as a
 fallback only. `map_area` writes one when it cannot prove the write-back —
@@ -110,7 +114,8 @@ The placement keeps the cursor where it is:
     y = cy / sh * (sh - h)
 
 `sw, sh` is the screen size, `cx, cy` is the pen position in screen pixels,
-`SCALE` is the conf value (0.05 to 0.80 of the screen width) and `aspect`
+`SCALE` is the conf value (a fraction of the screen width, held inside
+`SCALE_MIN` and `SCALE_MAX`, see Settings) and `aspect`
 is the tablet's own width / height, read from the device's `size` property.
 Wacom's Windows driver uses the same rule. Near a screen border the area
 drifts slower than the cursor, and it never leaves the screen.
@@ -187,8 +192,8 @@ degrees. Wacom Center shows the threshold as degrees and rewrites the
 binding.
 
 Each tick runs `tablet-precision-size.sh up` or `down` once. The script adds
-or removes `RING_STEP` percentage points (conf, default 0.5), clamps
-`SCALE` to 0.05 to 0.80 and rewrites the conf in place. With the mode on it
+or removes `RING_STEP` percentage points (conf, default 0.5), holds
+`SCALE` inside `SCALE_MIN` and `SCALE_MAX` and rewrites the conf in place. With the mode on it
 calls `tablet-precision.sh resize`. With the mode off it starts the size
 preview, one per spin. A tick while the area is dragged (a relocate marker
 under 3 s old) does nothing.
@@ -491,7 +496,8 @@ The toggle reads the conf on every run and needs no poke.
 
 | Key | Meaning | Default | Written by |
 |---|---|---|---|
-| `SCALE` | area width as a fraction of the screen width, 0.05 to 0.80 | 0.36 | Wacom Center, the ring |
+| `SCALE` | area width as a fraction of the screen width, held inside the two limits below | 0.36 | Wacom Center, the ring |
+| `SCALE_MIN`, `SCALE_MAX` | the smallest and the largest `SCALE` the toggle, the ring and the size slider allow; 0 = no limit on that side (the area still ends at the full screen width and at one pixel) | 0.05, 0.80 | Wacom Center |
 | `DIM` | dim strength outside the area, 0 to 0.8 | 0.10 | Wacom Center |
 | `HOLD` | the default touch register: seconds a resting finger waits before its touch action when the key has no `TOUCH_HOLD_<n>`, 0 = at once | 0.15 | you (a hand edit; the tab writes per-key values) |
 | `TOUCH_HOLD_<n>` | key n's own touch register | `HOLD` | Wacom Center (the Touch register column) |
@@ -575,10 +581,10 @@ bash only: no Qt, no tablet, no KWin. Exit 0 = all green.
 | Gate | What it checks |
 |---|---|
 | `py_compile`, `bash -n` | every Python file compiles, every shell script parses |
-| `tests/check_map.py` | every chunk marker has a bullet in `PROJECT_MAP.md`, and every bullet names a marker |
-| `tests/test_script.sh` (65 checks) | the toggle: on, move, resize around the centre with the clamp, suspend, resume, off, the run lock, and a heal that waits for the pen without holding that lock. The write-back: a bus switch and a logout while on leave the pen on the whole screen, a base that is not the whole screen is put back as itself, the ledger fallback when the write-back cannot be proved, OFF with the tablet switched off, and a pause that resumes at the same area within `RECONNECT` seconds. A stubbed `busctl` that keeps `outputArea` per product AND seeds a device that has just appeared from `kcminputrc`, the way KWin does |
-| `tests/test_size.sh` (22 checks) | the ring script: the step and its clamps, `RING_STEP` from the conf, resize only with the mode on, the preview only with it off, nothing while the marker is fresh, and 12 ticks at once stepping `SCALE` exactly 12 times without losing a conf line |
-| `tests/test_hover.py` (82 checks) | the daemon: a named pipe plays the pad, a fake pen, fake overlays, a fake toggle. The ghost, the drag, `waiting` and `solid`, a conf edit mid-rest, `HOLD` 0, the long press and what must not arm it, the heal that a node set starts, and the runtime dir and control pipe the daemon makes for itself at a fresh login, and the absence timer that pauses precision mode. A held touch chord and the ghost released when the tablet goes away, and a new heal when it returns. A chord held through a conf reload goes up at the reload, once. A pen with no position yet, in the daemon's reader and in `tablet-pen-pos.py` (the pen node found by `BTN_TOOL_PEN`, then exit 1 without asking XWayland) |
+| `tests/check_map.py` | every chunk marker has a bullet in `PROJECT_MAP.md`, and every bullet names a marker; a source file's header stays at 2 comment lines |
+| `tests/test_script.sh` (69 checks) | the toggle: on, move, resize around the centre with the clamp, the size limits (the defaults, no limit, one pixel), suspend, resume, off, the run lock, and a heal that waits for the pen without holding that lock. The write-back: a bus switch and a logout while on leave the pen on the whole screen, a base that is not the whole screen is put back as itself, the ledger fallback when the write-back cannot be proved, OFF with the tablet switched off, and a pause that resumes at the same area within `RECONNECT` seconds. A stubbed `busctl` that keeps `outputArea` per product AND seeds a device that has just appeared from `kcminputrc`, the way KWin does |
+| `tests/test_size.sh` (24 checks) | the ring script: the step and the size limits, `RING_STEP` from the conf, resize only with the mode on, the preview only with it off, nothing while the marker is fresh, and 12 ticks at once stepping `SCALE` exactly 12 times without losing a conf line |
+| `tests/test_hover.py` (88 checks) | the daemon: a named pipe plays the pad, a fake pen, fake overlays, a fake toggle. The ghost, the drag, `waiting` and `solid`, a conf edit mid-rest, `HOLD` 0, the long press and what must not arm it, the heal that a node set starts, and the runtime dir and control pipe the daemon makes for itself at a fresh login, and the absence timer that pauses precision mode. A held touch chord and the ghost released when the tablet goes away, and a new heal when it returns. A chord held through a conf reload goes up at the reload, once. A node that refuses its first open is opened by a later rescan, and so is a node whose reads end under the same name. One heal at a time, and a failed heal is run again, 5 runs at most. A pen with no position yet, in the daemon's reader and in `tablet-pen-pos.py` (the pen node found by `BTN_TOOL_PEN`, then exit 1 without asking XWayland) |
 
 Not part of the gate: `tests/add_markers.py` puts a chunk marker above every
 new def, function or mode (idempotent).

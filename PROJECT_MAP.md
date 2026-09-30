@@ -44,7 +44,8 @@ ledgers must outlive the session, so they live in
 | `$RD/paused` | `pause` (the daemon: the tablet gone past its grace with the mode on) | `unpause` (`heal`, toggle ON) | three lines: when the tablet went (epoch s), the base, the area line. Resumed within `RECONNECT` s, else dropped; dies at logout |
 | ledger `<state>/tabprec/<vendor>-<product>` | the toggle's `map_area`, ONLY when `unpersist` cannot prove the write-back | `heal_off` (mode `heal`, toggle ON); toggle OFF and a proved write-back delete it | `BFX BFY BFW BFH FX FY FW FH`: the pen's base and the last rectangle set on it. Never written on a healthy system |
 | `$RD/preview.pid`, `overlay.log`, `preview.log`, `probe.js` | the ring script / the toggle | the ring script / nobody | housekeeping |
-| conf `SCALE` | Wacom Center, the ring script | the toggle (every run), the size preview | 0.05–0.80 of the screen width; default 0.36 |
+| conf `SCALE` | Wacom Center, the ring script | the toggle (every run), the size preview | fraction of the screen width, held inside the soft cap; default 0.36 |
+| conf `SCALE_MIN`, `SCALE_MAX` | Wacom Center (the Precision tab) | the toggle, the ring script, the size preview, Wacom Center's size slider | the soft cap on `SCALE`; defaults 0.05 and 0.80; 0 = no cap on that side (the area still ends at the full width and at one pixel) |
 | conf `DIM` | Wacom Center | the toggle, the size preview | 0–0.8; default 0.10 |
 | conf `HOLD` | you, by hand | the daemon (on a `hover.ctl` poke only, NOT by polling); Wacom Center (the register column's default) | the touch register of a key with no `TOUCH_HOLD_<n>`: seconds a resting finger waits; no floor (0 = at once), default 0.15 |
 | conf `LONG` | Wacom Center | the daemon (on a `hover.ctl` poke only, NOT by polling) | seconds a press that confirmed a drag stays down to leave the mode; 0 = never, default 0.7 |
@@ -110,7 +111,7 @@ the tablet goes, and `heal` resumes it.
 - **chunk: `note`** — notify-send wrapper; only errors notify.
 - **chunk: `kload`** / **`kunload`** — load and unload the one-shot KWin script of the mouse fallback.
 - **chunk: `find_pen`** — the pen's sysname: cached (`$RD/pen`, one call confirms it) or a walk; none = notice + exit (`heal`: silent after 2 s; OFF: returns).
-- **chunk: `area_math`** — W H from SCALE and the tablet aspect, then X Y and the fractions: `pen` = the cursor-stationary placement, `centre` = centred and clamped to the screen.
+- **chunk: `area_math`** — W H from the capped SCALE and the aspect, then X Y and the fractions: `pen` = cursor-stationary, `centre` = centred, clamped to the screen.
 - **chunk: `compute_area`** — pen position (evdev, XWayland, then the mouse), then `area_math pen`; used by ON, a move and `where`.
 - **chunk: `pen_group`** — the pen's `kcminputrc` group path into `$GV $GP $GN` (maker, model, name); fails rather than guess one.
 - **chunk: `ledger`** — the pen's ledger file, `<vendor>-<product>`: written only when `unpersist` cannot prove the write-back.
@@ -120,7 +121,7 @@ the tablet goes, and `heal` resumes it.
 - **chunk: `remap`** — the area on record onto the pen again (`resume`, `heal` while ON); a 7-field area file gets its fractions.
 - **chunk: `heal_off`** — mode OFF: a pen still on its ledger's rectangle gets its base back; the ledger is spent either way.
 - **chunk: `unpause`** — a pause younger than `RECONNECT` s: the mode back at the SAME area; older, or 0 = dropped.
-- **chunk: `run-lock`** — `heal` finds the pen first (its 2 s wait holds no lock); then `flock` (5 s wait) and the conf with defaults.
+- **chunk: `run-lock`** — `heal` finds the pen first (its 2 s wait holds no lock); then `flock` (5 s), the conf, its defaults.
 - **chunk: `resize`** — while ON: `area_math centre` on the recorded centre, then `apply_area` (the ring calls it); nothing when the width is already on screen; the pen only without a record.
 - **chunk: `where`** — prints the area a toggle ON would map now, nothing changed (the ghost).
 - **chunk: `suspend`** / **`resume`** — while ON: the base mapping back / the recorded area again through `remap` (the daemon brackets a drag with them).
@@ -198,7 +199,7 @@ resumed); a tablet gone for `GRACE` pauses the mode.
 - **chunk: `wacom_nodes`** — every Wacom hidraw node with its bus and product id, from sysfs.
 - **chunk: `pen_open`** / **`pen_norm`** — the pen's evdev fd; its normalized position from EVIOCGABS, None when out of proximity and on the minimum (the kernel zeroes it on exit).
 - **chunk: `toggle`** — runs `tablet-precision.sh MODE` (suspend / resume / toggle / pause); reports success.
-- **chunk: `heal`** — `tablet-precision.sh heal` in the background, never waited for; `watch` starts it per opened node set.
+- **chunk: `heal`** / **`heal_poll`** — the toggle's `heal` in the background, one at a time; a failed run is retried, 5 tries.
 - **chunk: `Follower`** — the rectangle that follows the pen: `show` (ghost), `move` (drag, sends `waiting`), `follow` (tick), `hide` (cancel or confirm, sends `solid`).
 - **chunk: `Warper`** — the mouse onto the pen and the chords: `ensure` (one device, retried), `warp(mapped, why)`, `chord_down`/`chord_up` (press/touch tags, after the warp), `release_all`, `close`.
 - **chunk: `mask_text`** — "none" or the hex mask, for the log.
@@ -210,7 +211,7 @@ resumed); a tablet gone for `GRACE` pauses the mode.
 ### `tablet-precision-size.sh` — one ring tick: SCALE ± RING_STEP points
 - **chunk: `tick-lock`** — `$RD/conf.lock` (not the toggle's), taken before the conf is read and dropped after it is written.
 - **chunk: `drag-guard`** — a relocate marker under 3 s old (the area is being dragged): exit, nothing changes.
-- **chunk: `step`** — SCALE ± RING_STEP/100 (conf, default 0.5 points; junk = 0.5), clamped to 0.05–0.80.
+- **chunk: `step`** — SCALE ± RING_STEP/100 (conf, default 0.5 points; junk = 0.5), held inside the soft cap.
 - **chunk: `conf-write`** — rewrites SCALE and DIM under the tick lock, temp file then `mv`, keeping every other line.
 - **chunk: `resize-or-preview`** — mode on: `tablet-precision.sh resize` (the area itself, around its centre); off: the size preview unless one is running.
 
@@ -219,7 +220,7 @@ Draws with `tablet-overlay.qml` in the waiting look, so it is precision mode's
 own picture centred on the screen. Watches the conf's mtime at 10 Hz, redraws
 on a change, fades 1.2 s after the last change and exits; fades at once when
 precision mode comes on.
-- **chunk: `read_conf`** — SCALE and DIM from the conf, clamped.
+- **chunk: `read_conf`** — SCALE (soft cap applied) and DIM from the conf.
 - **chunk: `tablet_aspect`** — width / height of the pen tablet from KWin's device list, 1.6 fallback.
 - **chunk: `window`** — the Qt app, the QML engine, the root window; `waiting` set once.
 - **chunk: `apply_scale`** — pixel size from SCALE and the aspect, centred; pushes px py pw ph dimval and shows.
@@ -268,7 +269,7 @@ motion before the chord (`parse_chord` / `chord`).
 - **chunk: `is_raw_form`** / **`kread_group`** / **`kwrite_group`** — a binding to show read-only; the same read/write for any group (the Pen tab).
 - **chunk: `ring_read`** / **`ring_write`** — one ring mode's binding: two chords + angle; both empty = unbound; threshold = degrees × 120.
 - **chunk: `precision_ring_mode`** — which mode carries the precision-size pair; (0, defaults) when none; looked up fresh.
-- **chunk: `PrecisionTab`** — size/dim sliders (debounced 300 ms, `flush_pending` first), long-press/reconnect/ring-step, tick angle + swap.
+- **chunk: `PrecisionTab`** — size/dim sliders (debounced, `flush_pending` first), size limits, long-press/reconnect/ring-step, tick angle + swap.
 - **chunk: `pad_icon`** / **`ring_icon`** — the key and ring pictures: dot/dash mark, the doughnut with mode n lit (7:30, clockwise).
 - **chunk: `draw_ants`** / **`AntsLineEdit`** / **`AntsCheckBox`** / **`AntsRadio`** — the flowing outline: amber = a pie box, red = precision's field.
 - **chunk: `PadTab`** — the pad table: Touch+Press (read-only if raw), rings, pie ticks, the Precision tick, apply+`checkpoint()`; asleep=banner.
@@ -321,12 +322,12 @@ lock (heal's pen retry outside it), the write-back to `kcminputrc` (a bus switch
 base set by hand, the ledger fallback), OFF with the tablet gone, pause and
 resume; with a stubbed `busctl` that keeps `outputArea` per product like KWin,
 and a fake overlay), `test_size.sh` (the ring
-script: the step and its clamps, RING_STEP from the conf, the resize only
+script: the step and the soft cap, RING_STEP from the conf, the resize only
 with the mode on, the preview only with it off, nothing while the marker is
 fresh; a stub toggle and a fake preview) and `test_hover.py` (the daemon with a named pipe as the
 pad, a fake pen, fake overlays and a fake toggle that logs its modes; the
 `waiting` / `solid` lines; a conf edit mid-rest; HOLD 0; the long press and
-what must not arm it; the heal a node set starts; the pause after the grace; a held
+what must not arm it; the heal a node set starts, one at a time, retried on failure; the pause after the grace; a held
 chord and the ghost released when the tablet goes, and its heal on return; a pen
 with no position yet, in the daemon and in `tablet-pen-pos.py`). Every rig takes
 `<scratch dir> <script path>`. `add_markers.py <dir> [out dir]` puts a marker

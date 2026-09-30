@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
-# Centred fading preview of the precision area size (Plasma 6 Wayland).
-# Part of plasma-wacom-center (MIT).
-#
-# Spawned by tablet-precision-size.sh on a ring tick while precision mode is
-# OFF; watches ~/.config/tabprec.conf, redraws on every change, fades out
-# 1.2 s after the last change and exits. Drawn with tablet-overlay.qml, so it
-# looks exactly like precision mode - the dim bands and the border - in the
-# waiting style (the border dashed, flowing clockwise), centred on the
-# screen. Precision mode coming on while it shows fades it out at once: the
-# real overlay is there. Click-through, the same layer-shell window. Tablet
-# aspect ratio is read from the compositor.
+# tablet-size-preview.py - the centred, fading preview of the precision area size (a ring tick with precision mode off).
+# Part of plasma-wacom-center (MIT). Structure and contracts: PROJECT_MAP.md; mechanisms: TECHNICAL.md.
 import os
 import subprocess
 import sys
@@ -53,21 +44,30 @@ def tablet_aspect():
 
 # ── chunk: read_conf
 def read_conf():
-    """(SCALE, DIM) from the conf, clamped the way the toggle clamps them."""
-    scale, dim = 0.36, 0.10
+    """(SCALE, DIM) from the conf, clamped the way the toggle clamps them: SCALE to the soft cap
+    (conf SCALE_MIN / SCALE_MAX, 0 = none on that side), then to the screen width."""
+    scale, dim, lo, hi = 0.36, 0.10, 0.05, 0.80
     try:
         for line in CONF.read_text().splitlines():
             key, _, val = line.partition("=")
             try:
                 if key.strip() == "SCALE":
-                    scale = max(0.05, min(0.80, float(val)))
+                    scale = float(val)
+                elif key.strip() == "SCALE_MIN":
+                    lo = float(val)
+                elif key.strip() == "SCALE_MAX":
+                    hi = float(val)
                 elif key.strip() == "DIM":
                     dim = max(0.0, min(0.8, float(val)))
             except ValueError:
                 pass
     except OSError:
         pass
-    return scale, dim
+    if hi > 0:
+        scale = min(scale, hi)
+    if lo > 0:
+        scale = max(scale, lo)
+    return min(scale, 1.0), dim
 
 
 # ── chunk: window

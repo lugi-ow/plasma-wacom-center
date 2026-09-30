@@ -1,31 +1,6 @@
 #!/usr/bin/env python3
-# tablet-pad-probe.py [--all] - watch the tablet's raw HID reports and print
-# every byte that changes. Purpose: find where the pad's ExpressKey TOUCH
-# sense lives (a finger resting on a key without pressing it - what triggers
-# "Express View" in Wacom's own driver). The kernel's Bluetooth pad parser
-# (wacom_intuos_pro2_bt_pad) reads only bytes 281, 282 and 285 of report
-# 0x80 - keys, centre button, ring - and never maps the EXPRESSKEYCAP usage,
-# so this state is invisible through evdev and only hidraw shows it.
-#
-# Watches every Wacom hidraw node at once (over USB there is more than one)
-# and tags each line with the node and its bus. Bluetooth and USB use
-# DIFFERENT report layouts: run the probe once per connection type and keep
-# both results (tablet-hover.py reads *_BT and *_USB keys).
-#
-# Default view hides the pen: Bluetooth bytes 1..270 of report 0x80 and the
-# touch report 0x81, USB report 0x10 (all noisy while the pen hovers); --all
-# shows everything. USB result 2026-09-06: report 0x11, byte 2 = touch bits,
-# byte 1 = press bits, key N = bit N-1. Bluetooth: report 0x80, byte 283 =
-# touch bits, byte 282 = press bits, same bit order.
-#
-# Needs read access to the hidraw nodes (root-only by default) - the one
-# udev rule install.sh prints (step A) covers USB (0003) and Bluetooth
-# (0005) Wacom nodes:
-#   KERNEL=="hidraw*", KERNELS=="0003:056A:*|0005:056A:*", TAG+="uaccess"
-#
-# Protocol: pen away from the tablet. Rest a finger on ONE key, hold, lift;
-# repeat per key; then press a key. Each line: time, node, bus, report id,
-# [byte] old -> new (hex + binary).
+# tablet-pad-probe.py [--all] - print every byte that changes in the tablet's raw HID reports (finds the touch and press bytes).
+# Part of plasma-wacom-center (MIT). Structure and contracts: PROJECT_MAP.md; mechanisms: TECHNICAL.md.
 import os
 import re
 import select
@@ -77,8 +52,10 @@ def main():
         try:
             fds[os.open(path, os.O_RDONLY)] = (path, bus)
         except PermissionError:
-            sys.exit(f"{path}: permission denied - add the udev rules in the header")
+            sys.exit(f"{path}: permission denied - add the udev rule install.sh prints")
         print(f"# {path}: {name} ({bus})", file=sys.stderr)
+    # Protocol: the pen away from the tablet; rest a finger on ONE key, hold, lift; repeat per key; then press
+    # a key. Each line: time, node, bus, report id, [byte] old -> new (hex + binary).
     print("# rest a finger on a key WITHOUT pressing, then lift; Ctrl+C ends", file=sys.stderr)
     last = {}
     t0 = time.monotonic()

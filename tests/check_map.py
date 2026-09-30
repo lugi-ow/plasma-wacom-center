@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
-"""PROJECT_MAP.md gate - run from anywhere; no Qt, no tablet.
-
-The map lists, per source file, one bullet per chunk marker:
-
-    - **chunk: `name`** — what it is, who calls it.
+"""PROJECT_MAP.md gate - run from anywhere; no Qt, no tablet. Exit 0 = clean.
 
 Markers are `# ── chunk: <name>` (`// ── chunk:` in QML) above every top-level
 def, class, bash function and script mode, plus a few hand-placed block
-markers. Names before the bullet's first " — " count; backticks in the prose
-after it are mentions, not documentation. Several chunks may share a bullet
-(two or three bold names separated by slashes).
+markers. The map holds one bullet per marker (- **chunk: `name`** — ...);
+names before the bullet's first " — " count, and two or three bold names
+separated by slashes share a bullet.
 
 Checks: every marker has a bullet in its file's section; every bullet names a
-marker, unless the bullet is tagged *(public copy only)* or *(personal copy
-only)*; a marker above a def / class / bash function / case mode carries that
-thing's name (a mis-named marker is a stale one); markers are unique within a
-file; every source file has a "### `file`" section and every section names a
-file (a name ending in "/" is a directory) - a HEADING carrying the same
-*(… copy only)* tag may name a file the other copy has and this one has not;
-bullets stay short: 200 characters each, 120 on average. Exit 0 = clean.
+marker, unless tagged *(public copy only)* or *(personal copy only)*; a marker
+above a def / class / bash function / case mode carries that thing's name;
+markers are unique within a file; every source file has a "### `file`" section
+and every section names a file (a name ending in "/" is a directory; a HEADING
+with a *(... copy only)* tag may name a file this copy lacks); bullets stay
+short: 200 characters each, 120 on average; a source file's header stays at 2
+comment lines (the map owns structure).
 """
 import os
 import re
@@ -34,7 +30,7 @@ SH_CASE = re.compile(r"^(\w+|\*)\)")
 HEADING = re.compile(r"^### `([^`]+)`")
 BULLET = re.compile(r"^- \*\*chunk: ")
 NAME = re.compile(r"`([^`]+)`")
-MAX_BULLET, MAX_MEAN = 200, 120
+MAX_BULLET, MAX_MEAN, MAX_HEADER = 200, 120, 2
 
 
 def sources():
@@ -103,6 +99,11 @@ def main():
     lengths = []
     total = 0
     for fname in files:
+        with open(os.path.join(ROOT, fname), encoding="utf-8") as f:
+            head = [line for line in f.read().split("\n") if not line.startswith("#!")]
+        n = next((i for i, line in enumerate(head) if not line.startswith(("#", "//")) or MARKER.match(line)), len(head))
+        if n > MAX_HEADER:
+            problems.append(f"{fname}: header is {n} comment lines (cap {MAX_HEADER}): the map owns structure")
         marks = markers_in(os.path.join(ROOT, fname))
         total += len(marks)
         if fname not in sections:

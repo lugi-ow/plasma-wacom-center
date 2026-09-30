@@ -1,24 +1,6 @@
 #!/usr/bin/env python3
-# Wacom Center - one window for the drawing-tablet settings Plasma scatters.
-# Part of plasma-wacom-center (MIT).
-#
-# Precision tab: area size (% of screen width, tablet-shaped), dim strength,
-#   the long-press time that leaves the mode (seconds, no floor), the
-#   reconnect time (seconds, 0 = never), the ring step (points per tick),
-#   written to ~/.config/tabprec.conf, which tablet-precision.sh sources on
-#   every toggle and tablet-hover.py re-reads; the ring's tick angle and
-#   direction go into its kcminputrc [TabletRing] binding.
-# Pad buttons tab: the pad as a table - each key pictured as printed on the
-#   pad (the dot and dash marks), a Touch and a Press box per key, the
-#   ring's four modes between keys 4 and 5, the Pie keys column and the
-#   Precision column (one tick at most). A ticked pie key is Disabled in
-#   kcminputrc plus CHORD_<n> in the conf (amber waiting outline); the
-#   Precision key gets the toggle's global shortcut and HOVER_MASK, its
-#   fields consumed (red outline). The delay row is conf HOLD. Every Apply
-#   and delay change pokes the daemon's control pipe - no polling.
-#   Explanations live in the column tooltips (STE), not the window.
-# The pad device and the tablet aspect ratio are detected from the
-# compositor's device list - no hardcoded model names.
+# wacom_center.py - Wacom Center: one settings window (Precision, Pad buttons, Pen, Profiles).
+# Part of plasma-wacom-center (MIT). Structure and contracts: PROJECT_MAP.md; mechanisms: TECHNICAL.md.
 import base64
 import importlib.util
 import os
@@ -130,7 +112,7 @@ def detect_devices():
 
 # ── chunk: read_conf
 def read_conf():
-    values = {"SCALE": 0.36, "DIM": 0.10, "HOLD": 0.15, "LONG": 0.7, "RING_STEP": 0.5, "RECONNECT": 60.0}
+    values = {"SCALE": 0.36, "SCALE_MIN": 0.05, "SCALE_MAX": 0.80, "DIM": 0.10, "HOLD": 0.15, "LONG": 0.7, "RING_STEP": 0.5, "RECONNECT": 60.0}
     try:
         lines = CONF.read_text().splitlines()
     except OSError:
@@ -346,8 +328,17 @@ class PrecisionTab(QWidget):
         layout.addWidget(self.profile_label)
         self.size_label = QLabel()
         self.size = QSlider(Qt.Orientation.Horizontal)
-        self.size.setRange(5, 80)
+        self.size_min = self.percent_field(conf["SCALE_MIN"])
+        self.size_max = self.percent_field(conf["SCALE_MAX"])
+        self.limit_size()
         self.size.setValue(round(conf["SCALE"] * 100))
+        limit_row = QHBoxLayout()
+        limit_row.addWidget(QLabel("Smallest size:"))
+        limit_row.addWidget(self.size_min)
+        limit_row.addWidget(QLabel("Largest size:"))
+        limit_row.addWidget(self.size_max)
+        limit_row.addWidget(QLabel("(of screen width, for the slider and the ring; 0 = no limit)"))
+        limit_row.addStretch()
         self.dim_label = QLabel()
         self.dim = QSlider(Qt.Orientation.Horizontal)
         self.dim.setRange(0, 80)
@@ -400,8 +391,11 @@ class PrecisionTab(QWidget):
                           "on the next toggle or ring tick, the times within two seconds, the ring "
                           "step at the next tick.")
 
-        for w in (self.size_label, self.size, self.dim_label, self.dim):
-            layout.addWidget(w)
+        layout.addWidget(self.size_label)
+        layout.addWidget(self.size)
+        layout.addLayout(limit_row)
+        layout.addWidget(self.dim_label)
+        layout.addWidget(self.dim)
         layout.addLayout(long_row)
         layout.addLayout(reconnect_row)
         layout.addLayout(ring_row)
@@ -412,6 +406,8 @@ class PrecisionTab(QWidget):
             lambda: (save_conf_key("SCALE", f"{self.size.value() / 100:.4f}"), poke_daemon()))
         self._dim_timer = self._debounce_timer(
             lambda: (save_conf_key("DIM", f"{self.dim.value() / 100:.2f}"), poke_daemon()))
+        self.size_min.valueChanged.connect(lambda v: (save_conf_key("SCALE_MIN", f"{v / 100:.2f}"), self.limit_size()))
+        self.size_max.valueChanged.connect(lambda v: (save_conf_key("SCALE_MAX", f"{v / 100:.2f}"), self.limit_size()))
         self.size.valueChanged.connect(self.update_labels)
         self.dim.valueChanged.connect(self.update_labels)
         self.size.valueChanged.connect(lambda: self._size_timer.start())
@@ -472,6 +468,23 @@ class PrecisionTab(QWidget):
         box.setKeyboardTracking(False)      # save on Enter, focus-out or a step, not per keystroke
         box.setValue(value)
         return box
+
+    @staticmethod
+    def percent_field(value):
+        """A size limit in whole percent of the screen width; 0 reads "no limit" (the conf keeps the 0)."""
+        box = QSpinBox()
+        box.setRange(0, 100)
+        box.setSuffix(" %")
+        box.setSpecialValueText("no limit")
+        box.setLocale(QLocale.c())
+        box.setKeyboardTracking(False)      # save on Enter, focus-out or a step, not per keystroke
+        box.setValue(round(value * 100))
+        return box
+
+    def limit_size(self):
+        """The size slider's ends = the soft cap (conf SCALE_MIN / SCALE_MAX, the limit the toggle and the
+        ring use); no limit = 1% and the full width. A value now outside moves in and is saved."""
+        self.size.setRange(self.size_min.value() or 1, self.size_max.value() or 100)
 
     def update_labels(self):
         pct = self.size.value()

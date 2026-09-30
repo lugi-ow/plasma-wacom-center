@@ -131,7 +131,8 @@ reconnect time to 0 to keep precision mode off.
 
 Open Wacom Center from the application menu, in the Settings category.
 The Precision tab has the area size (5 to 80 % of the screen width), the
-dim strength, the long-press time, the reconnect time, the ring step, the
+smallest and the largest size (change these two limits, or set one to 0
+for no limit), the dim strength, the long-press time, the reconnect time, the ring step, the
 tick angle, and a switch for the ring direction. The Pad buttons tab is the whole pad as a
 table: each key's Touch and Press shortcuts, its own Touch register, the
 ring's four modes, the Pie keys column (one tick per side), and the

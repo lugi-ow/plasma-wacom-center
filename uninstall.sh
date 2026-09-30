@@ -1,17 +1,16 @@
 #!/bin/bash
-# uninstall.sh - remove plasma-wacom-center for the current user. The
-# reverse of install.sh. Your settings are kept; the paths and the one
-# sudo line are printed at the end. Safe to re-run.
-#
+# uninstall.sh - remove plasma-wacom-center for the current user: the reverse of install.sh; safe to re-run.
+# Your settings are kept; the paths and the one sudo line are printed at the end.
+set -e
+BIN="$HOME/.local/bin"
+APPS="$HOME/.local/share/applications"
+RD="${XDG_RUNTIME_DIR:-/tmp}/tabprec"
+
 # Step 1 switches precision mode off FIRST, and stops if it cannot. KWin keeps
 # the pen's mapping in kcminputrc and loads it again every time the tablet
 # appears, so a precision rectangle left behind outlives the uninstall: the pen
 # would stay in a small part of the screen with every tool that knew the full
 # mapping deleted. RESCUE.txt says how to undo that by hand.
-set -e
-BIN="$HOME/.local/bin"
-APPS="$HOME/.local/share/applications"
-RD="${XDG_RUNTIME_DIR:-/tmp}/tabprec"
 
 echo "== 1/5 Switching precision mode off"
 if [ -f "$RD/saved-area" ]; then

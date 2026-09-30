@@ -1,36 +1,6 @@
 #!/usr/bin/env python3
-# tablet-pointer-warp.py X Y [SW SH] - move the MOUSE pointer to screen pixel
-# X,Y on Plasma 6 Wayland, without root, through a short-lived virtual
-# absolute mouse on /dev/uinput (Kubuntu tags uinput "uaccess", so the
-# seat user may write it).
-#
-# Why: KWin keeps the mouse pointer and the pen's tablet cursor apart, and
-# everything that asks the compositor "where is the pointer" - Kando's menu
-# placement, KWin scripting's workspace.cursorPos - gets the MOUSE. Warping
-# the mouse onto the pen right before such a call makes the two agree.
-#
-# Waits until KWin has picked the virtual device up (its D-Bus device list),
-# sends one absolute motion, holds the device a moment so the motion is
-# processed, then removes it. Whole thing ~150 ms. SW SH default to the
-# virtual screen size from X (XWayland root). Exit 1 if /dev/uinput is not
-# writable or KWin never listed the device. DEBUG=1 traces.
-#
-# tablet-hover.py imports this file and keeps ONE such device for its whole
-# life (create / warp / destroy), warping the mouse onto the pen at every
-# pad key press. The daemon's device also carries KEYBOARD keys (create's
-# keys argument, parse_chord, chord): a pad key with a CHORD_<n> conf line
-# is set to Disabled in kcminputrc (Disabled, not a deleted line - KWin
-# hands an UNBOUND pad button to a tablet-aware app), and the daemon
-# presses the chord itself right after the warp - one device, one write
-# order, so KWin processes the motion before the chord and a Kando pie
-# bound to that chord opens under the pen. This command line stays for
-# one-shot debugging runs; it keeps the mouse-only device.
-#
-# Units: X Y are pixels of the SW x SH screen - the X screen, i.e. PHYSICAL
-# pixels, the same space tablet-pen-pos.py reports in. The motion is sent as
-# a fraction of the axis range, so it lands on the same physical spot even
-# when the display is scaled (a 2560x1440 panel at 133% is a 1920x1080
-# logical screen to KWin: workspace.cursorPos then reads 0.75x these X Y).
+# tablet-pointer-warp.py X Y [SW SH] - move the MOUSE pointer to a screen pixel through a virtual mouse on uinput; tablet-hover.py imports it.
+# Part of plasma-wacom-center (MIT). Structure and contracts: PROJECT_MAP.md; mechanisms: TECHNICAL.md.
 import ctypes as C
 import fcntl
 import os
@@ -218,7 +188,9 @@ def warp(fd, fx, fy):
     """Move the pointer to the screen fraction fx, fy (0..1 each). Two
     frames: the kernel drops an ABS value equal to the axis's current one,
     so a second warp to the spot of the first would be lost - a frame one
-    unit away first makes the real one a change every time."""
+    unit away first makes the real one a change every time. A fraction of
+    the axis lands on the same physical spot on a scaled display too (a
+    2560x1440 panel at 133% is 1920x1080 to KWin: cursorPos reads 0.75x)."""
     vx = max(0, min(ABS_RANGE - 1, int(fx * ABS_RANGE)))
     vy = max(0, min(ABS_RANGE - 1, int(fy * ABS_RANGE)))
     for x, y in ((vx ^ 1, vy ^ 1), (vx, vy)):

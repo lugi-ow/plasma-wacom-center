@@ -1,8 +1,6 @@
 #!/bin/bash
-# install.sh - deploy plasma-wacom-center for the current user. No root needed
-# for the deploy itself; one udev rule (printed at the end) needs sudo - it
-# covers the pen position and the express keys' touch sense.
-# Safe to re-run.
+# install.sh - deploy plasma-wacom-center for the current user; safe to re-run. No root for the deploy itself:
+# one udev rule (printed at the end) needs sudo - it covers the pen position and the express keys' touch sense.
 set -e
 cd "$(dirname "$0")"
 BIN="$HOME/.local/bin"

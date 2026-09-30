@@ -1,16 +1,6 @@
 #!/bin/bash
-# tablet-precision-size.sh {up|down} - step the precision area size by
-# RING_STEP percentage points of the screen width (conf key, default 0.5;
-# the Wacom Center ring field).
-#
-# Called by the tablet ring (mode 1) through two F-key chords. Writes SCALE
-# to ~/.config/tabprec.conf, then: precision mode ON - the area itself takes
-# the new size around its own centre (tablet-precision.sh resize) and nothing
-# else shows; OFF - the centred size preview (tablet-size-preview.py, the
-# look of the mode with the waiting border) shows the prospective size and
-# fades by itself; it watches the conf, so one process serves a whole spin.
-# While the area is being DRAGGED (tablet-hover.py keeps $RD/relocate under
-# 3 s old) a tick does nothing at all - not even the conf changes.
+# tablet-precision-size.sh {up|down} - one ring tick: step the precision area size (conf SCALE) by RING_STEP points.
+# Part of plasma-wacom-center (MIT). Structure and contracts: PROJECT_MAP.md; mechanisms: TECHNICAL.md.
 
 export LC_ALL=C.UTF-8
 CONF="${XDG_CONFIG_HOME:-$HOME/.config}/tabprec.conf"
@@ -36,8 +26,12 @@ fi
 # ── chunk: step
 STEP=$(awk -v p="${RING_STEP:-0.5}" 'BEGIN{ if (p + 0 <= 0) p = 0.5; printf "%.4f", p / 100 }')   # points per tick, from the conf
 [ "$1" = "down" ] && STEP="-$STEP"
-SCALE=$(awk -v s="$SCALE" -v d="$STEP" 'BEGIN{
-    s += d; if (s > 0.80) s = 0.80; if (s < 0.05) s = 0.05;
+# the soft cap (conf SCALE_MIN / SCALE_MAX, 0 = none on that side); without one the full screen width and 0.001
+case "${SCALE_MIN:-}" in ""|*[!0-9.]*) SCALE_MIN=0.05;; esac
+case "${SCALE_MAX:-}" in ""|*[!0-9.]*) SCALE_MAX=0.80;; esac
+SCALE=$(awk -v s="$SCALE" -v d="$STEP" -v lo="$SCALE_MIN" -v hi="$SCALE_MAX" 'BEGIN{
+    s += d; if (hi + 0 > 0 && s > hi) s = hi; if (lo + 0 > 0 && s < lo) s = lo;
+    if (s > 1) s = 1; if (s < 0.001) s = 0.001;
     printf "%.4f", s}')
 # ── chunk: conf-write
 # rewrite SCALE/DIM in place and keep every other line (touch-preview keys)

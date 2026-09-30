@@ -542,9 +542,51 @@ check("U a refused node: said once, the other node opened",
 os.chmod(node_b, 0o600)
 time.sleep(0.5)
 check("U access granted later: the rescan opens the node", sum(f"{node_b}: usb report" in s for s in said) == 1)
+os.close(wa)                               # the node's reads end while its name stays (the driver replaced it)
+time.sleep(0.05)
+wa = os.open(node_a, os.O_RDWR)            # a writer again: the rescan's open would block on a pipe without one
+time.sleep(0.5)
+check("U a node whose reads end under the same name is opened again",
+      sum(f"{node_a}: usb report" in s for s in said) == 2)
 n_nodes[:] = []                            # the watch ends at its next rescan
 time.sleep(0.4)
 os.close(wa); os.close(wb)
+
+# --- Y: heal runs one at a time, and a run that fails is tried again (REVIEW HLA-02, HLA-03): a heal
+#        that lost its wait for KWin left the pen on the rectangle until the next bus change. The fake
+#        heal takes 0.2 s and fails until its run count reaches HEAL_OK_AT. A fourth copy ---
+hy = importlib.util.module_from_spec(spec_p)
+spec_p.loader.exec_module(hy)
+HEALD = SCRATCH / "heal"
+HEALD.mkdir()
+HEAL_LOG = HEALD / "runs"
+(HEALD / "tablet-precision.sh").write_text(
+    '#!/bin/bash\necho run >> "$HEAL_LOG"\nsleep 0.2\n[ "$(wc -l < "$HEAL_LOG")" -ge "$HEAL_OK_AT" ]\n')
+(HEALD / "tablet-precision.sh").chmod(0o755)
+os.environ["HEAL_LOG"], os.environ["HEAL_OK_AT"] = str(HEAL_LOG), "4"
+hy.DIR = HEALD
+hy.log = lambda text: None
+runs = lambda: len(HEAL_LOG.read_text().splitlines()) if HEAL_LOG.exists() else 0
+
+
+def rescans(seconds):
+    """What the watch loop does at every rescan, for this long."""
+    end = time.time() + seconds
+    while time.time() < end:
+        getattr(hy, "heal_poll", lambda: None)()
+        time.sleep(0.1)
+
+
+hy.heal(); hy.heal(); hy.heal()            # the node set changed three times while the first run is going
+time.sleep(0.12)
+check("Y three requests while a heal runs: one run", runs() == 1)
+rescans(2.0)
+check("Y a failed heal is tried again until one succeeds: 4 runs, then quiet", runs() == 4)
+HEAL_LOG.unlink(missing_ok=True)
+os.environ["HEAL_OK_AT"] = "99"
+hy.heal()
+rescans(2.5)
+check("Y a heal that always fails stops after HEAL_TRIES runs", runs() == getattr(hy, "HEAL_TRIES", 0))
 
 # --- X: the tablet goes away while a touch chord is held and the ghost is up (a lost Bluetooth link).
 #        Nothing may stay pressed or drawn: a latched Ctrl turns every click into a Ctrl+click. When the

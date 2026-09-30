@@ -1,110 +1,6 @@
 #!/usr/bin/env python3
-# tablet-hover.py [--simulate] - ExpressKey touch preview for precision mode.
-#
-# The Intuos Pro's express keys sense a resting finger before the press (what
-# drives "Express View" in Wacom's own driver). While a finger rests on the
-# precision-mode key, this daemon shows a GHOST of the area precision mode
-# would map right now - same placement math as the toggle - and moves it
-# with the pen; it removes the ghost when the finger lifts or the key is
-# pressed, when the real toggle takes over. The ghost is the look of
-# precision mode itself (tablet-overlay.py --waiting: the same dim bands and
-# border, the border dashed and flowing clockwise - a preview, waiting to be
-# activated).
-#
-# With precision mode already ON the same key RELOCATES it. Rest the finger
-# for HOLD seconds (conf key, default 0.15, the Wacom Center field) and the REAL
-# overlay, the precision UI itself and not the ghost, starts following the
-# pen with the same placement math and the ghost's flowing border (the
-# pipe lines "waiting" / "solid") while the pen gets the base mapping back
-# (tablet-precision.sh suspend): the cursor roams the whole screen and the
-# area travels around it. Press the key to map the area there; lift without
-# pressing and the overlay snaps back and the old area is mapped again
-# (tablet-precision.sh resume). The overlay is moved through its named pipe
-# (tablet-overlay.py --fifo), the current geometry comes from the toggle's
-# area file, and a marker file, kept fresh while the overlay follows, tells
-# the toggle that the coming press is a move, not an OFF. All three live in
-# $XDG_RUNTIME_DIR/tabprec next to the toggle's state file.
-#
-# HOLD has no floor. At 0 every touch starts a drag at once and every press
-# is a move, so the way OUT is the LONG PRESS: keep the key pressed for LONG
-# seconds after a press that confirmed a drag (conf key, default 0.7, the
-# second Wacom Center field; 0 switches the long press off) and precision
-# mode goes off. The area lands at the press first - KWin fires the toggle
-# on the key-down and nothing can hold that back - and the daemon runs the
-# toggle again LONG later; the toggle script serializes its runs with a
-# lock, so the two land in a row whatever their timing.
-#
-# The kernel never exposes the touch sense: its Bluetooth pad parser reads
-# only the key, centre-button and ring bytes of report 0x80, and the
-# EXPRESSKEYCAP HID usage is unmapped. So this reads the tablet's raw HID
-# reports from hidraw (one udev uaccess rule, printed by install.sh), every
-# Wacom node at once.
-#
-# Zero configuration on known models: the report layout (which report,
-# which byte holds the touch bits, which the press bits) is built in per
-# product id below. The PRECISION KEY is defined, not guessed: Wacom
-# Center's Precision column writes its bit to ~/.config/tabprec.conf as
-# HOVER_MASK (no key ticked = no HOVER_MASK = the ghost and the drag stay
-# off). Unknown models: run tablet-pad-probe.py once per connection type
-# and write HOVER_REPORT_<BUS> / HOVER_BYTE_<BUS> / PRESS_BYTE_<BUS> (BUS
-# = USB or BT); HOVER_MASK_<BUS> / PRESS_MASK_<BUS> override per bus. Conf
-# keys always win over the built-ins. Bluetooth and USB use different
-# layouts; the daemon switches by itself when the tablet changes bus.
-#
-# The pad reports only on change: a resting finger is ONE report, then
-# silence, so the debounce is a timer. While a rectangle follows the pen,
-# the pen is polled from its evdev node (EVIOCGABS, ~30 Hz) and the
-# rectangle is re-placed with the toggle's formula x = cx/sw*(sw-w). After
-# a press nothing happens until the finger has left the key. The conf is
-# re-read when a line arrives on $XDG_RUNTIME_DIR/tabprec/hover.ctl -
-# Wacom Center pokes that pipe on every Apply and delay change; after a
-# hand edit, `echo reload > .../hover.ctl` does the same (a reload waits
-# until no rectangle follows the pen). Hardware still polls: the nodes
-# are rescanned every 2 s - the tablet announces nothing on its own.
-# Every node set it opens (a connect, a wake, a bus switch, its own start)
-# starts `tablet-precision.sh heal` in the background: with precision mode on,
-# the pen that turned up takes the area on record, and after a recent pause
-# the mode resumes where it was. The tablet GONE for GRACE seconds with the
-# mode on pauses it (`tablet-precision.sh pause`), so no rectangle is left
-# drawn on the screen with no tablet to switch it off.
-# Messages go to stderr (the journal under autostart).
-#
-# A finger landing on ANY pad key also WARPS THE MOUSE onto the pen (and the
-# press does it again). KWin keeps the mouse pointer and the pen cursor apart,
-# and whatever asks it "where is the pointer" - Kando placing a pie,
-# workspace.cursorPos - gets the mouse, so a menu bound to a pad key's chord
-# opened wherever the mouse was left. For a key bound in kcminputrc the warp
-# is a race the daemon LOSES: KWin synthesizes the chord inside its own
-# handling of the pad button and Kando reads the pointer ~2 ms later, while
-# the warp needs a userspace round trip from the same HID report - the pie
-# opened one press behind, every time (measured 2026-09-09; the touch sense
-# leads only sometimes over Bluetooth, so it cannot close the race either).
-# CHORD_<n> in the conf ends the race: pad key n is set to DISABLED in
-# kcminputrc (Disabled, not a deleted line - KWin hands an unbound pad
-# button to a tablet-aware app) and the daemon presses the chord itself
-# (tablet-pointer-warp.py parse_chord/chord: modifiers in KWin's own order,
-# then one F-key) right after the warp on the SAME virtual device - one
-# device, one write order, KWin processes the motion first,
-# deterministically. The chord is held until the key is released, like a
-# real key (Kando's turbo mode keeps working); a lost node releases it. n =
-# the daemon's key number = press-byte bit n-1, the numbering HOVER_MASK
-# uses. Conf WARP=0 switches the warp off (chords still fire); the touch
-# warp stays as a best effort for keys kcminputrc still owns.
-#
-# TOUCH_CHORD_<n> holds a chord DOWN while a finger RESTS on key n and
-# releases it at the lift - a held Ctrl for Blender's sculpt, a pie on a
-# touch. The finger must rest key n's TOUCH REGISTER first (conf
-# TOUCH_HOLD_<n>, the Pad tab's per-key column; conf HOLD is the fallback
-# default; 0 = at once); a press that comes sooner wins - that contact fires
-# only the press action and no touch chord until the finger has left the
-# key. A press AFTER the chord engaged keeps it held (Ctrl+click combos).
-# Bare modifiers are allowed here, except Meta alone (a lone synthetic
-# Meta press-and-release is kglobalaccel's launcher tap). The warp repeats
-# right before the chord engages, so a pie bound to a touch opens under
-# the pen. The precision key's touch belongs to the ghost and the drag:
-# a TOUCH_CHORD on that key is ignored.
-#
-# --simulate: draw the ghost for 3 s, following the pen, and exit.
+# tablet-hover.py [--simulate] - the ExpressKey daemon: touch preview (ghost), area drag, pad chords, mouse warp.
+# Part of plasma-wacom-center (MIT). Structure and contracts: PROJECT_MAP.md; mechanisms: TECHNICAL.md.
 import fcntl
 import importlib.util
 import os
@@ -131,6 +27,8 @@ LONG_DEFAULT = 0.7                   # a press that confirmed a drag, kept down 
 RESCAN = 2.0                        # seconds between checks for new/lost hidraw nodes (hardware only)
 GRACE = 10.0                        # seconds the tablet may be gone with precision mode on before the mode pauses: a cable swap reconnects inside it
 TICK = 0.03                          # poll period while a rectangle follows the pen or a press is being judged
+HEAL_TRIES = 5                      # heal runs per tablet appearance: a run that fails is tried again at the next rescan
+HEAL = {"proc": None, "left": 0, "due": False}   # the heal run in flight, the tries left, a run owed
 BUS = {"0003": "usb", "0005": "bt"}
 
 # ── chunk: FAMILIES
@@ -310,13 +208,35 @@ def toggle(mode, *extra):
 
 # ── chunk: heal
 def heal():
-    """Start `tablet-precision.sh heal` in the background, never waiting: the pen's mapping is put
-    right after a connect, a wake or a bus switch. Its line, when it acts, lands in this journal."""
-    try:
-        subprocess.Popen([str(DIR / "tablet-precision.sh"), "heal"], stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, start_new_session=True)
-    except OSError as err:
-        log(f"heal not started: {err}")
+    """A tablet appeared: ask for `tablet-precision.sh heal` in the background, never waiting - the
+    pen's mapping is put right after a connect, a wake or a bus switch. Its line, when it acts, lands
+    in this journal. One run at a time: a request made while one runs is served when it ends."""
+    HEAL["left"], HEAL["due"] = HEAL_TRIES, True
+    heal_poll()
+
+
+# ── chunk: heal_poll
+def heal_poll():
+    """Reap the heal run and start the one that is due. A run that exits non-zero lost its 2 s wait
+    for KWin to list the pen (or the lock, or the mapping write): it is due again, HEAL_TRIES runs
+    per request, so a rectangle is not left on the pen until the next bus change."""
+    if HEAL["proc"] is not None:
+        code = HEAL["proc"].poll()
+        if code is None:
+            return
+        HEAL["proc"] = None
+        if code != 0:
+            HEAL["left"] -= 1
+            HEAL["due"] = HEAL["due"] or HEAL["left"] > 0
+            log(f"heal failed (exit {code}): " + (f"another try, {HEAL['left']} left" if HEAL["left"] > 0
+                                                 else "no more tries until a tablet appears again"))
+    if HEAL["due"]:
+        HEAL["due"] = False
+        try:
+            HEAL["proc"] = subprocess.Popen([str(DIR / "tablet-precision.sh"), "heal"], stdin=subprocess.DEVNULL,
+                                            stdout=subprocess.DEVNULL, start_new_session=True)
+        except OSError as err:
+            log(f"heal not started: {err}")
 
 
 # ── chunk: Follower
@@ -785,6 +705,7 @@ def watch(conf, follower, warper=None):
                 last_scan = now
                 if warper is not None:
                     warper.ensure()                 # a virtual mouse lost or never created: another try
+                heal_poll()                         # a heal that failed gets its next try
                 if wacom_nodes() != nodes:
                     return True                 # bus switch or tablet gone: rescan
                 missed = [node for node in missed if not attach(node, quiet=True)]
@@ -839,7 +760,7 @@ def cycle(follower, warper, gone, rescan=None):
 # ── chunk: main
 def main():
     follower = Follower()
-    if "--simulate" in sys.argv:
+    if "--simulate" in sys.argv:          # the ghost for 3 s, following the pen, then exit
         follower.show(None)
         if not follower.up:
             sys.exit("no ghost: tablet-precision.sh where failed (tablet asleep?)")
