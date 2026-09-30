@@ -56,7 +56,7 @@ ledgers must outlive the session, so they live in
 | conf `HOVER_MASK` | Wacom Center (the Precision column) | the daemon | the precision key's bit; absent = the ghost and the drag are off |
 | conf `TOUCH_CHORD_<n>` | Wacom Center (the Touch box) | the daemon (on a poke) | chord held while a finger rests on key n (engages after its register, mirror release); bare modifiers allowed, never on the mask key |
 | conf `TOUCH_HOLD_<n>` | Wacom Center (the Touch register column) | the daemon (on a poke) | key n's touch register in seconds; absent = `HOLD`, the default register |
-| `$RD/hover.ctl` | Wacom Center (Apply, a register change, a Precision-tab save), a hand `echo reload` | the daemon (in its select loop) | any line = re-read the conf; deferred while a rectangle follows the pen |
+| `$RD/hover.ctl` | Wacom Center (Apply, a register change, a Precision-tab save), a hand `echo reload` | the daemon (in its select loop) | any line = re-read the conf (every held chord released first, the contact spent); deferred while a rectangle follows the pen |
 | conf `HOVER_REPORT`, `HOVER_BYTE`, `PRESS_BYTE`, `PRESS_MASK` (+ `_USB` / `_BT`) | you, for an unknown model (from the probe) | the daemon | report layout overrides |
 | KWin `outputArea` (D-Bus) | the toggle only | — | the pen's LIVE mapping, in KWin's memory. The precision rectangle exists only here and in `$RD`, both of which die with the session; the device's `size` gives the tablet's aspect |
 | `kcminputrc` `[Libinput][<vendor>][<product>][<name>]` `OutputArea` | KWin (on every D-Bus write) and then the toggle's `unpersist`, which puts the BASE back at once and reads it to prove it | KWin, whenever that device appears | the mapping the pen must have with precision mode OFF. The key is DELETED when that is the whole screen (absent = `0,0,1,1` to KWin). USB and Bluetooth are two products = two groups |
@@ -182,7 +182,10 @@ gets its chord pressed by the daemon right after the warp on the same
 device (KWin processes the motion first, so a pie opens under the pen),
 and conf `TOUCH_CHORD_<n>` is held from the key's touch register
 (`TOUCH_HOLD_<n>`, `HOLD` the default) to the lift. The conf reloads on
-a `hover.ctl` poke, not by polling. Each node set it opens starts the
+a `hover.ctl` poke, not by polling; the reload releases every held chord
+first, while the finger is still down, and spends the contact (a profile
+switch rewrites kcminputrc a moment later, and no release sent after that
+rewrite reaches the focused window). Each node set it opens starts the
 toggle's `heal` (the area onto the pen that came back, or a recent pause
 resumed); a tablet gone for `GRACE` pauses the mode.
 - **chunk: `log`** — stderr line with the `tablet-hover:` prefix (the journal under autostart).
@@ -199,7 +202,7 @@ resumed); a tablet gone for `GRACE` pauses the mode.
 - **chunk: `Follower`** — the rectangle that follows the pen: `show` (ghost), `move` (drag, sends `waiting`), `follow` (tick), `hide` (cancel or confirm, sends `solid`).
 - **chunk: `Warper`** — the mouse onto the pen and the chords: `ensure` (one device, retried), `warp(mapped, why)`, `chord_down`/`chord_up` (press/touch tags, after the warp), `release_all`, `close`.
 - **chunk: `mask_text`** — "none" or the hex mask, for the log.
-- **chunk: `watch`** — opens the node set, `heal`s; re-reads the conf once the pipe opens (an earlier poke is not lost); reports→warp, chords; timers; reload; rescans.
+- **chunk: `watch`** — opens the nodes (retried), `heal`s; re-reads the conf at the pipe open; reports→warp, chords; timers; a reload releases held chords; rescans.
 - **chunk: `Absence`** — the tablet gone with the mode ON: past `GRACE` (10 s) runs `pause` with the moment it went.
 - **chunk: `cycle`** — one daemon pass: `watch` while the tablet is here, else time its absence and sleep.
 - **chunk: `main`** — `--simulate`, or `cycle` forever with one `Warper` and one `Absence`.

@@ -409,7 +409,11 @@ bound to a touch opens at the pen's current spot; with Kando's turbo
 mode, lift the finger on a slice to select it. Touch chords may be bare
 modifiers - but not Meta alone, whose synthetic press-and-release is the
 launcher tap. The precision key is exempt: its touch belongs to the ghost
-and the drag. Touch chords need pad keys with a touch sensor.
+and the drag. Touch chords need pad keys with a touch sensor. A conf
+reload (a profile switch, an Apply, a hand poke) releases every held chord
+first and spends that contact: lift the finger and land again for a new
+chord. A release sent after the switch's `kcminputrc` write would never
+land (see `KNOWLEDGE.md`).
 
 ### The ghost and the drag
 
@@ -574,7 +578,7 @@ bash only: no Qt, no tablet, no KWin. Exit 0 = all green.
 | `tests/check_map.py` | every chunk marker has a bullet in `PROJECT_MAP.md`, and every bullet names a marker |
 | `tests/test_script.sh` (65 checks) | the toggle: on, move, resize around the centre with the clamp, suspend, resume, off, the run lock, and a heal that waits for the pen without holding that lock. The write-back: a bus switch and a logout while on leave the pen on the whole screen, a base that is not the whole screen is put back as itself, the ledger fallback when the write-back cannot be proved, OFF with the tablet switched off, and a pause that resumes at the same area within `RECONNECT` seconds. A stubbed `busctl` that keeps `outputArea` per product AND seeds a device that has just appeared from `kcminputrc`, the way KWin does |
 | `tests/test_size.sh` (22 checks) | the ring script: the step and its clamps, `RING_STEP` from the conf, resize only with the mode on, the preview only with it off, nothing while the marker is fresh, and 12 ticks at once stepping `SCALE` exactly 12 times without losing a conf line |
-| `tests/test_hover.py` (80 checks) | the daemon: a named pipe plays the pad, a fake pen, fake overlays, a fake toggle. The ghost, the drag, `waiting` and `solid`, a conf edit mid-rest, `HOLD` 0, the long press and what must not arm it, the heal that a node set starts, and the runtime dir and control pipe the daemon makes for itself at a fresh login, and the absence timer that pauses precision mode. A held touch chord and the ghost released when the tablet goes away, and a new heal when it returns. A pen with no position yet, in the daemon's reader and in `tablet-pen-pos.py` (the pen node found by `BTN_TOOL_PEN`, then exit 1 without asking XWayland) |
+| `tests/test_hover.py` (82 checks) | the daemon: a named pipe plays the pad, a fake pen, fake overlays, a fake toggle. The ghost, the drag, `waiting` and `solid`, a conf edit mid-rest, `HOLD` 0, the long press and what must not arm it, the heal that a node set starts, and the runtime dir and control pipe the daemon makes for itself at a fresh login, and the absence timer that pauses precision mode. A held touch chord and the ghost released when the tablet goes away, and a new heal when it returns. A chord held through a conf reload goes up at the reload, once. A pen with no position yet, in the daemon's reader and in `tablet-pen-pos.py` (the pen node found by `BTN_TOOL_PEN`, then exit 1 without asking XWayland) |
 
 Not part of the gate: `tests/add_markers.py` puts a chunk marker above every
 new def, function or mode (idempotent).

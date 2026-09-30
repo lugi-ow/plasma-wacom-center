@@ -519,6 +519,33 @@ hp.cycle(None, None, g, rescan=0)
 check("P the tablet back resets the timer", g.since is None and calls == [])
 STATE.unlink()
 
+# --- U: a node that refuses its first open (a USB plug-in: the node exists before udev grants access)
+#        is opened by a later rescan, while the node that did open keeps working. A third copy (P stubbed watch) ---
+hn = importlib.util.module_from_spec(spec_p)
+spec_p.loader.exec_module(hn)
+hn.RESCAN = 0.2
+hn.CTL = SCRATCH / "hover_n.ctl"
+hn.heal = lambda: None
+said = []
+hn.log = said.append
+node_a, node_b = SCRATCH / "n_a.fifo", SCRATCH / "n_b.fifo"
+os.mkfifo(node_a); os.mkfifo(node_b)
+wa, wb = os.open(node_a, os.O_RDWR), os.open(node_b, os.O_RDWR)
+os.chmod(node_b, 0)
+n_nodes = [(str(node_a), "usb", "0357"), (str(node_b), "usb", "0357")]
+hn.wacom_nodes = lambda: list(n_nodes)
+threading.Thread(target=lambda: hn.watch(hn.read_conf(), type("F", (), {"up": False, "hide": lambda *a, **k: None})()),
+                 daemon=True).start()
+time.sleep(0.5)
+check("U a refused node: said once, the other node opened",
+      sum("Permission denied" in s for s in said) == 1 and sum("usb report" in s for s in said) == 1)
+os.chmod(node_b, 0o600)
+time.sleep(0.5)
+check("U access granted later: the rescan opens the node", sum(f"{node_b}: usb report" in s for s in said) == 1)
+n_nodes[:] = []                            # the watch ends at its next rescan
+time.sleep(0.4)
+os.close(wa); os.close(wb)
+
 # --- X: the tablet goes away while a touch chord is held and the ghost is up (a lost Bluetooth link).
 #        Nothing may stay pressed or drawn: a latched Ctrl turns every click into a Ctrl+click. When the
 #        tablet comes back, the node set opens again and starts a new heal ---
@@ -542,6 +569,25 @@ writer = os.open(PAD, os.O_RDWR)           # the tablet is back
 NODES[:] = [(str(PAD), "bt", "0360")]
 time.sleep(0.6)
 check("X back: the node set opens again and starts a new heal", ghost().count("CALL heal") == heals + 1)
+
+# --- R: a touch chord held through a conf reload. A profile switch pokes the daemon and rewrites
+#        kcminputrc a moment later; KWin drops its whole rebind table and its virtual device on that
+#        write, so a release sent afterwards never reaches the focused window - Shift stayed logically
+#        pressed and Kate typed uppercase (hardware, 2026-09-14; the journal shows the daemon did send
+#        that late release). The reload itself must release the chord, while the finger still rests ---
+CONF.write_text("SCALE=0.29\nDIM=0.10\nHOVER_MASK=0x80\nHOLD=0.6\n"
+                "TOUCH_CHORD_5=Shift\nTOUCH_HOLD_5=0.1\n")
+poke()
+n_ev = len(EVENTS)
+report(touch=0x10)                         # a finger rests on key 5: Shift engages after its register
+time.sleep(0.35)
+engaged = ("down", ("touch", 5), "Shift") in EVENTS[n_ev:]
+poke()                                     # the profile switch reloads the conf mid-hold
+at_reload = EVENTS[n_ev:].count(("up", ("touch", 5)))
+report(touch=0x00)                         # the finger lifts at last
+time.sleep(0.2)
+check("R a chord held through a conf reload goes up AT the reload, exactly once",
+      engaged and at_reload == 1 and EVENTS[n_ev:].count(("up", ("touch", 5))) == 1)
 
 # --- N: out of range. The kernel zeroes X, Y and the tool key whenever the pen leaves proximity, so a
 #        lifted pen reads the minimum on both axes - same as a node that has not reported yet. The daemon

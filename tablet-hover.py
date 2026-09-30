@@ -598,19 +598,29 @@ def watch(conf, follower, warper=None):
         ctl = None
     conf = read_conf()                # again, now that the pipe is open: a poke sent before this open is not lost
     fds = {}                          # fd -> [path, bus, product, layout]
-    for path, bus, product in nodes:
+
+    def attach(node, quiet=False):
+        """Open one node into fds. False = it would not open: the caller keeps it for another try."""
+        path, bus, product = node
         layout = layout_for(conf, bus, product)
         if layout is None:
             log(f"{path} ({bus}, product {product}): unknown layout - run tablet-pad-probe.py")
-            continue
+            return True
         try:
             fd = os.open(path, os.O_RDONLY)
         except OSError as err:
-            log(f"{path}: {err}")
-            continue
+            if not quiet:
+                log(f"{path}: {err}")
+            return False
         fds[fd] = [path, bus, product, layout]
         log(f"{path}: {bus} report 0x{layout['report']:02x}, touch byte {layout['touch']}, "
             f"press byte {layout['press']}, precision key {mask_text(layout['mask'])}")
+        return True
+
+    # A USB plug-in makes the node before udev grants access to it (and the wacom driver replaces the
+    # first node under the SAME name): an open that lands in that gap fails, and the node set never
+    # changes again. Such a node is tried again at every rescan.
+    missed = [node for node in nodes if not attach(node)]
     if not fds:
         if ctl is not None:
             os.close(ctl)
@@ -652,6 +662,7 @@ def watch(conf, follower, warper=None):
                     report = b""
                 if not report:
                     os.close(fd)
+                    missed.append(tuple(fds[fd][:3]))   # replaced under the same name: the rescan opens it again
                     del fds[fd]
                     pending.pop(fd, None)
                     held.discard(fd)
@@ -754,6 +765,18 @@ def watch(conf, follower, warper=None):
                 follower.follow()
             if reload_pending and not follower.up:
                 reload_pending = False          # a Wacom Center Apply, a delay change, or a hand poke
+                # Every chord goes UP here, while the finger is still down. The poke comes from a
+                # profile switch that rewrites kcminputrc a moment later, and KWin rebuilds its whole
+                # rebind table and its virtual device on that write: a release sent after it never
+                # reaches the focused window, so a held Shift stayed logically pressed (hardware,
+                # 2026-09-14; the journal shows the daemon DID send that late release). Released
+                # before the rewrite it lands. The contact is then spent - a finger that rests through
+                # a reload gets its chord back by lifting and landing again, never by itself, so no
+                # chord is ever pressed across the rewrite.
+                if warper is not None and warper.held:
+                    log("conf reload: the held chords go up first")
+                    warper.release_all()
+                touch_since.clear()             # a touch register that spans a reload is spent too
                 conf = read_conf()              # a finger already resting on a key stays known
                 for node in fds.values():
                     node[3] = layout_for(conf, node[1], node[2]) or node[3]
@@ -764,6 +787,7 @@ def watch(conf, follower, warper=None):
                     warper.ensure()                 # a virtual mouse lost or never created: another try
                 if wacom_nodes() != nodes:
                     return True                 # bus switch or tablet gone: rescan
+                missed = [node for node in missed if not attach(node, quiet=True)]
     finally:
         for fd in fds:
             os.close(fd)

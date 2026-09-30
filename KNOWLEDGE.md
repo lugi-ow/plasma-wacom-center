@@ -143,6 +143,18 @@ the tablet-pad protocol. The daemon keeps that one device for its whole
 life: creating one per press would spend milliseconds on KWin's device
 enumeration, and the chord's keys must already be registered.
 
+**A release sent after a `kcminputrc` rebind write never lands.** KWin's
+buttonrebinds plugin rebuilds its whole table and its virtual device on any
+`[ButtonRebinds]` change, and sends no release for keys held at that
+moment. A touch chord (Shift) held through a profile switch stayed pressed
+on the hardware even when both profiles held the same chord (2026-09-14).
+The daemon's journal showed it kept the chord and sent the release 4 s
+later - correct, and too late: the switch had rewritten `kcminputrc` 0.3 s
+after its reload poke. So the daemon releases every held chord AT the
+reload, while the finger still rests, and spends that contact: lift and
+land again for a new chord. Carrying the state was what the code already
+did, and was exactly what failed.
+
 **The kernel drops an unchanged ABS value.** `input_handle_abs_event`
 ignores an `ABS_X` whose value equals the axis's current one. A long-lived
 virtual mouse that warps to the spot of its previous warp sends a frame
@@ -164,6 +176,16 @@ bytes 281, 282 and 285 of report 0x80 (keys, centre button, ring), and the
 `EXPRESSKEYCAP` HID usage has no mapping. The only way to get it is to read
 the raw reports from `/dev/hidraw*` next to the kernel driver
 (`tablet-pad-probe.py`, `tablet-hover.py`).
+
+**A hidraw node exists before udev grants access to it.** On a USB plug-in
+the daemon's 2 s rescan can open `/dev/hidraw*` in the gap between the
+kernel creating the node and udev applying the `uaccess` rule: `[Errno 13]
+Permission denied` in the journal (2026-09-30, twice in one night). The
+daemon opened each node once and compared only node names afterwards, so
+the refused node stayed closed until the bus changed: no preview, no pies,
+no touch chords, while the other node and KWin's own shortcuts worked. A
+node that would not open is now tried again at every rescan, and so is a
+node whose read ends while its name stays.
 
 **Overlays that must not eat input**: a Qt window with
 `Qt.WindowTransparentForInput` on the layer-shell overlay layer
